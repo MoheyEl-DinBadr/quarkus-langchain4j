@@ -78,7 +78,7 @@ public class SpanWrapper implements AiServiceMethodImplementationSupport.Wrapper
         public String extract(AiServiceMethodImplementationSupport.Input input) {
             Optional<AiServiceMethodCreateInfo.SpanInfo> spanInfoOpt = input.createInfo.getSpanInfo();
             if (spanInfoOpt.isPresent()) {
-                return spanInfoOpt.get().getName();
+                return spanInfoOpt.get().name();
             }
             return null;
         }
