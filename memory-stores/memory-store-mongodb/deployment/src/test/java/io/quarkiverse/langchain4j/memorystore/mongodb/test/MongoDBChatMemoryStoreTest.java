@@ -47,6 +47,14 @@ public class MongoDBChatMemoryStoreTest extends OpenAiBaseTest {
     @BeforeEach
     void setUp() {
         wiremock.resetRequests();
+
+        System.out.println("Number of stub mappings: " + wiremock.allStubMappings().getMappings().size());
+
+        setChatCompletionMessageContent("Test content");
+        System.out.println("After setting content, stub mappings: " + wiremock.allStubMappings().getMappings().size());
+
+        wiremock.resetRequests();
+
     }
 
     @RegisterAiService
@@ -73,6 +81,8 @@ public class MongoDBChatMemoryStoreTest extends OpenAiBaseTest {
         /* **** First request for user 1 **** */
         String firstMessageFromFirstUser = "Hello, my name is Klaus";
         setChatCompletionMessageContent("Nice to meet you Klaus");
+        System.out
+                .println("After setting content in method, stub mappings: " + wiremock.allStubMappings().getMappings().size());
         String firstAiResponseToFirstUser = chatWithSeparateMemoryForEachUser.chat(FIRST_MEMORY_ID, firstMessageFromFirstUser);
 
         // assert response
