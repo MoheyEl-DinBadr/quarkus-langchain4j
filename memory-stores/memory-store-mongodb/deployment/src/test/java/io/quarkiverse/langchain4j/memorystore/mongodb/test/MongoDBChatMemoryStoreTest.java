@@ -8,7 +8,6 @@ import static org.assertj.core.api.Assertions.tuple;
 import java.io.IOException;
 import java.util.List;
 
-import com.github.tomakehurst.wiremock.client.WireMock;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -19,6 +18,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import com.github.tomakehurst.wiremock.client.WireMock;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.Filters;
