@@ -8,16 +8,17 @@ import static org.assertj.core.api.Assertions.tuple;
 import java.io.IOException;
 import java.util.List;
 
+import com.github.tomakehurst.wiremock.client.WireMock;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 import org.bson.Document;
+import org.jboss.shrinkwrap.api.ShrinkWrap;
+import org.jboss.shrinkwrap.api.spec.JavaArchive;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.TestMethodOrder;
+import org.junit.jupiter.api.extension.RegisterExtension;
 
-import com.github.tomakehurst.wiremock.client.WireMock;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.Filters;
@@ -31,27 +32,30 @@ import io.quarkiverse.langchain4j.RegisterAiService;
 import io.quarkiverse.langchain4j.memorystore.MongoDBChatMemoryStore;
 import io.quarkiverse.langchain4j.openai.testing.internal.OpenAiBaseTest;
 import io.quarkiverse.langchain4j.runtime.LangChain4jUtil;
-import io.quarkiverse.wiremock.devservice.ConnectWireMock;
-import io.quarkus.test.junit.QuarkusTest;
+import io.quarkiverse.langchain4j.testing.internal.WiremockAware;
+import io.quarkus.test.QuarkusUnitTest;
 
-@QuarkusTest
-@ConnectWireMock
-@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 public class MongoDBChatMemoryStoreTest extends OpenAiBaseTest {
 
     public static final int FIRST_MEMORY_ID = 1;
     public static final int SECOND_MEMORY_ID = 2;
 
-    private WireMock wiremock;
+    @RegisterExtension
+    static final QuarkusUnitTest unitTest = new QuarkusUnitTest()
+            .setArchiveProducer(
+                    () -> ShrinkWrap.create(JavaArchive.class))
+            .overrideRuntimeConfigKey("quarkus.langchain4j.openai.base-url",
+                    WiremockAware.wiremockUrlForConfig("/v1"));
 
     @BeforeEach
     void setUp() {
-        wiremock.resetRequests();
-        wiremock.resetMappings();
+        wiremock().resetRequests();
+        wiremock().resetMappings();
     }
 
+    @Override
     protected void setChatCompletionMessageContent(String messageContent) {
-        wiremock.register(
+        wiremock().register(
                 WireMock.post(WireMock.urlEqualTo("/v1/chat/completions"))
                         .willReturn(WireMock.aResponse()
                                 .withStatus(200)
@@ -104,8 +108,6 @@ public class MongoDBChatMemoryStoreTest extends OpenAiBaseTest {
         /* **** First request for user 1 **** */
         String firstMessageFromFirstUser = "Hello, my name is Klaus";
         setChatCompletionMessageContent("Nice to meet you Klaus");
-        System.out
-                .println("After setting content in method, stub mappings: " + wiremock.allStubMappings().getMappings().size());
         String firstAiResponseToFirstUser = chatWithSeparateMemoryForEachUser.chat(FIRST_MEMORY_ID, firstMessageFromFirstUser);
 
         // assert response

@@ -12,8 +12,11 @@ import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.shrinkwrap.api.ShrinkWrap;
+import org.jboss.shrinkwrap.api.spec.JavaArchive;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
 
 import com.github.tomakehurst.wiremock.client.WireMock;
 import com.github.tomakehurst.wiremock.stubbing.Scenario;
@@ -22,21 +25,24 @@ import dev.langchain4j.agent.tool.Tool;
 import io.quarkiverse.langchain4j.RegisterAiService;
 import io.quarkiverse.langchain4j.ToolBox;
 import io.quarkiverse.langchain4j.openai.testing.internal.OpenAiBaseTest;
-import io.quarkiverse.wiremock.devservice.ConnectWireMock;
-import io.quarkus.test.junit.QuarkusTest;
+import io.quarkiverse.langchain4j.testing.internal.WiremockAware;
+import io.quarkus.test.QuarkusUnitTest;
 
-@QuarkusTest
-@ConnectWireMock
 public class MongoDBMemoryToolBoxTest extends OpenAiBaseTest {
+
+    @RegisterExtension
+    static final QuarkusUnitTest unitTest = new QuarkusUnitTest()
+            .setArchiveProducer(
+                    () -> ShrinkWrap.create(JavaArchive.class))
+            .overrideRuntimeConfigKey("quarkus.langchain4j.openai.base-url",
+                    WiremockAware.wiremockUrlForConfig("/v1"));
 
     private static final String scenario = "tools";
     private static final String secondState = "second";
 
-    private WireMock wireMock;
-
     @BeforeEach
     void setUp() {
-        wireMock.resetRequests();
+        wiremock().resetRequests();
     }
 
     @Inject
