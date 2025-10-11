@@ -23,6 +23,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -53,6 +54,8 @@ import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.data.pdf.PdfFile;
 import dev.langchain4j.guardrail.ChatExecutor;
 import dev.langchain4j.guardrail.GuardrailRequestParams;
+import dev.langchain4j.invocation.InvocationContext;
+import dev.langchain4j.invocation.InvocationParameters;
 import dev.langchain4j.memory.ChatMemory;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
@@ -81,6 +84,7 @@ import dev.langchain4j.service.Result;
 import dev.langchain4j.service.output.ServiceOutputParser;
 import dev.langchain4j.service.tool.ToolErrorHandlerResult;
 import dev.langchain4j.service.tool.ToolExecution;
+import dev.langchain4j.service.tool.ToolExecutionResult;
 import dev.langchain4j.service.tool.ToolExecutor;
 import dev.langchain4j.service.tool.ToolProviderRequest;
 import dev.langchain4j.service.tool.ToolProviderResult;
@@ -152,6 +156,9 @@ public class AiServiceMethodImplementationSupport {
         AiServiceMethodCreateInfo createInfo = input.createInfo;
         Object[] methodArgs = input.methodArgs;
 
+        /**
+         * @deprecated In favor of https://docs.langchain4j.dev/tutorials/observability#ai-service-observability
+         */
         var auditSourceInfo = new AuditSourceInfoImpl(createInfo, methodArgs);
         var beanManager = Arc.container().beanManager();
 
@@ -159,11 +166,17 @@ public class AiServiceMethodImplementationSupport {
         try {
             var result = doImplement(createInfo, methodArgs, context, auditSourceInfo);
 
+            /**
+             * @deprecated In favor of https://docs.langchain4j.dev/tutorials/observability#ai-service-observability
+             */
             beanManager.getEvent().select(LLMInteractionCompleteEvent.class)
                     .fire(new DefaultLLMInteractionCompleteEvent(auditSourceInfo, result));
 
             return result;
         } catch (Exception e) {
+            /**
+             * @deprecated In favor of https://docs.langchain4j.dev/tutorials/observability#ai-service-observability
+             */
             beanManager.getEvent().select(LLMInteractionFailureEvent.class)
                     .fire(new DefaultLLMInteractionFailureEvent(auditSourceInfo, e));
 
@@ -193,6 +206,9 @@ public class AiServiceMethodImplementationSupport {
         }
 
         var beanManager = Arc.container().beanManager();
+        /**
+         * @deprecated In favor of https://docs.langchain4j.dev/tutorials/observability#ai-service-observability
+         */
         beanManager.getEvent().select(InitialMessagesCreatedEvent.class)
                 .fire(new DefaultInitialMessagesCreatedEvent(auditSourceInfo, systemMessage, userMessage));
 
@@ -220,12 +236,28 @@ public class AiServiceMethodImplementationSupport {
         List<ToolSpecification> effectiveToolSpecifications = toolSpecifications;
         Map<String, ToolExecutor> finalToolExecutors = toolExecutors;
 
+        InvocationParameters invocationParameters = findInvocationParams(methodArgs);
+
+        InvocationContext invocationContext = InvocationContext.builder()
+                .invocationId(UUID.randomUUID())
+                .interfaceName(context.aiServiceClass.getName())
+                .methodName(methodCreateInfo.getMethodName())
+                .methodArguments(methodArgs != null ? Arrays.asList(methodArgs) : List.of())
+                .chatMemoryId(memoryId)
+                .invocationParameters(invocationParameters)
+                .timestampNow()
+                .build();
+
         AugmentationResult augmentationResult = null;
         if (context.retrievalAugmentor != null) {
             List<ChatMessage> chatMemory = context.hasChatMemory()
                     ? context.chatMemoryService.getChatMemory(memoryId).messages()
                     : null;
-            Metadata metadata = Metadata.from(userMessage, memoryId, chatMemory);
+            Metadata metadata = Metadata.builder()
+                    .chatMessage(userMessage)
+                    .chatMemory(chatMemory)
+                    .invocationContext(invocationContext)
+                    .build();
             AugmentationRequest augmentationRequest = new AugmentationRequest(userMessage, metadata);
 
             if (!isMulti) {
@@ -294,7 +326,7 @@ public class AiServiceMethodImplementationSupport {
 
         userMessage = GuardrailsSupport.executeInputGuardrails(guardrailService, userMessage, methodCreateInfo,
                 chatMemory,
-                augmentationResult, templateVariables);
+                augmentationResult, templateVariables, invocationContext);
 
         CommittableChatMemory committableChatMemory;
         List<ChatMessage> messagesToSend;
@@ -325,7 +357,7 @@ public class AiServiceMethodImplementationSupport {
                     .toolExecutors(toolExecutors)
                     .retrievedContents((augmentationResult != null ? augmentationResult.contents() : null))
                     .context(context)
-                    .memoryId(memoryId)
+                    .invocationContext(InvocationContext.builder().chatMemoryId(memoryId).build())
                     .methodKey(methodCreateInfo)
                     .toolArgumentsErrorHandler((e, c) -> {
                         throw new RuntimeException(e);
@@ -337,6 +369,7 @@ public class AiServiceMethodImplementationSupport {
                                     .augmentationResult(augmentationResult)
                                     .userMessageTemplate(methodCreateInfo.getUserMessageTemplate())
                                     .variables(templateVariables)
+                                    .invocationContext(invocationContext)
                                     .build())
                     .build();
             return new AiServiceTokenStream(aiServiceTokenStreamParams);
@@ -399,6 +432,9 @@ public class AiServiceMethodImplementationSupport {
 
         log.debug("AI response obtained");
 
+        /**
+         * @deprecated In favor of https://docs.langchain4j.dev/tutorials/observability#ai-service-observability
+         */
         beanManager.getEvent().select(ResponseFromLLMReceivedEvent.class)
                 .fire(new DefaultResponseFromLLMReceivedEvent(auditSourceInfo, response));
 
@@ -428,26 +464,32 @@ public class AiServiceMethodImplementationSupport {
 
             boolean immediateToolReturn = true;
             List<ToolExecution> toolExecutions = new ArrayList<>();
+            List<ToolExecutionResultMessage> toolResults = new ArrayList<>();
             for (ToolExecutionRequest toolExecutionRequest : aiMessage.toolExecutionRequests()) {
                 log.debugv("Attempting to execute tool {0}", toolExecutionRequest);
                 ToolExecutor toolExecutor = toolExecutors.get(toolExecutionRequest.name());
 
-                ToolExecutionResultMessage toolExecutionResultMessage = toolExecutor == null
+                ToolExecutionResult toolExecutionResult = toolExecutor == null
                         ? context.toolService.applyToolHallucinationStrategy(toolExecutionRequest)
-                        : executeTool(auditSourceInfo, toolExecutionRequest, toolExecutor, memoryId, beanManager);
+                        : executeTool(auditSourceInfo, toolExecutionRequest, toolExecutor, invocationContext, beanManager);
+                ToolExecutionResultMessage toolExecutionResultMessage = ToolExecutionResultMessage.from(toolExecutionRequest,
+                        toolExecutionResult.resultText());
 
                 ToolExecution toolExecution = ToolExecution.builder()
                         .request(toolExecutionRequest)
-                        .result(toolExecutionResultMessage.text())
+                        .result(toolExecutionResult)
                         .build();
                 toolExecutions.add(toolExecution);
-                if (toolExecutor instanceof QuarkusToolExecutor) {
+                toolResults.add(toolExecutionResultMessage);
+                if (toolExecutor != null && toolExecutor instanceof QuarkusToolExecutor) {
                     immediateToolReturn = ((QuarkusToolExecutor) toolExecutor).returnBehavior() == ReturnBehavior.IMMEDIATE;
                 } else {
                     immediateToolReturn = false;
                 }
 
-                committableChatMemory.add(toolExecutionResultMessage);
+            }
+            for (ToolExecutionResultMessage toolResult : toolResults) {
+                committableChatMemory.add(toolResult);
             }
             if (immediateToolReturn) {
                 if (!TypeUtil.isResult(returnType)) {
@@ -496,6 +538,9 @@ public class AiServiceMethodImplementationSupport {
             response = effectiveChatModel.chat(chatRequestBuilder.parameters(parametersBuilder.build()).build());
             log.debug("AI response obtained");
 
+            /**
+             * @deprecated In favor of https://docs.langchain4j.dev/tutorials/observability#ai-service-observability
+             */
             beanManager.getEvent().select(ResponseFromLLMReceivedEvent.class)
                     .fire(new DefaultResponseFromLLMReceivedEvent(auditSourceInfo, response));
 
@@ -541,17 +586,30 @@ public class AiServiceMethodImplementationSupport {
                 methodCreateInfo, responseAugmenterParam);
     }
 
-    private static ToolExecutionResultMessage executeTool(AuditSourceInfo auditSourceInfo,
-            ToolExecutionRequest toolExecutionRequest, ToolExecutor toolExecutor, Object memoryId,
+    private static InvocationParameters findInvocationParams(Object[] args) {
+        if (args == null) {
+            return new InvocationParameters();
+        }
+        for (Object arg : args) {
+            if (arg != null && arg instanceof InvocationParameters) {
+                return (InvocationParameters) arg;
+            }
+        }
+        return new InvocationParameters();
+    }
+
+    private static ToolExecutionResult executeTool(AuditSourceInfo auditSourceInfo,
+            ToolExecutionRequest toolExecutionRequest, ToolExecutor toolExecutor, InvocationContext invocationContext,
             BeanManager beanManager) {
-        String toolExecutionResult = toolExecutor.execute(toolExecutionRequest, memoryId);
+        ToolExecutionResult toolExecutionResult = toolExecutor.executeWithContext(toolExecutionRequest, invocationContext);
         log.debugv("Result of {0} is '{1}'", toolExecutionRequest, toolExecutionResult);
-        ToolExecutionResultMessage toolExecutionResultMessage = ToolExecutionResultMessage.from(
-                toolExecutionRequest,
-                toolExecutionResult);
+
+        /**
+         * @deprecated In favor of https://docs.langchain4j.dev/tutorials/observability#ai-service-observability
+         */
         beanManager.getEvent().select(ToolExecutedEvent.class)
-                .fire(new DefaultToolExecutedEvent(auditSourceInfo, toolExecutionRequest, toolExecutionResult));
-        return toolExecutionResultMessage;
+                .fire(new DefaultToolExecutedEvent(auditSourceInfo, toolExecutionRequest, toolExecutionResult.resultText()));
+        return toolExecutionResult;
     }
 
     private static ChatRequest createChatRequest(JsonSchema jsonSchema, List<ChatMessage> messagesToSend,
@@ -601,6 +659,9 @@ public class AiServiceMethodImplementationSupport {
 
         var beanManager = Arc.container().beanManager();
 
+        /**
+         * @deprecated In favor of https://docs.langchain4j.dev/tutorials/observability#ai-service-observability
+         */
         beanManager.getEvent().select(InitialMessagesCreatedEvent.class)
                 .fire(new DefaultInitialMessagesCreatedEvent(auditSourceInfo, systemMessage, userMessage));
 
@@ -621,6 +682,9 @@ public class AiServiceMethodImplementationSupport {
 
         Response<Image> imageResponse = context.imageModel.generate(imagePrompt);
 
+        /**
+         * @deprecated In favor of https://docs.langchain4j.dev/tutorials/observability#ai-service-observability
+         */
         beanManager.getEvent().select(LLMInteractionCompleteEvent.class)
                 .fire(new DefaultLLMInteractionCompleteEvent(auditSourceInfo, imageResponse.content()));
 
