@@ -12,13 +12,14 @@ import io.quarkiverse.langchain4j.openai.testing.internal.OpenAiBaseTest;
 import io.quarkiverse.langchain4j.testing.internal.WiremockAware;
 import io.quarkus.test.QuarkusUnitTest;
 
+@SuppressWarnings("CdiInjectionPointsInspection")
 public class AgentBeanSmokeTest extends OpenAiBaseTest {
 
     @RegisterExtension
     static final QuarkusUnitTest unitTest = new QuarkusUnitTest()
             .setArchiveProducer(
                     () -> ShrinkWrap.create(JavaArchive.class)
-                            .addClasses(Agents.class))
+                            .addClasses(Agents.class, ParallelAgents.class))
             .overrideRuntimeConfigKey("quarkus.langchain4j.openai.api-key", "whatever")
             .overrideRuntimeConfigKey("quarkus.langchain4j.openai.base-url",
                     WiremockAware.wiremockUrlForConfig("/v1"));
@@ -31,6 +32,15 @@ public class AgentBeanSmokeTest extends OpenAiBaseTest {
 
     @Inject
     Agents.SupervisorStoryCreator supervisorStoryCreator;
+
+    @Inject
+    ParallelAgents.EveningPlannerAgent eveningPlannerAgent;
+
+    @Inject
+    Agents.MedicalExpertWithMemory medicalExpertWithMemory;
+
+    @Inject
+    Agents.StoryCreator storyCreator;
 
     @Test
     public void test() {

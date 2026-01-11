@@ -13,11 +13,13 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 
 import dev.langchain4j.agent.tool.ReturnBehavior;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
+import dev.langchain4j.exception.ToolArgumentsException;
 import dev.langchain4j.internal.Json;
 import dev.langchain4j.invocation.InvocationContext;
 import dev.langchain4j.service.tool.ToolExecutionResult;
 import dev.langchain4j.service.tool.ToolExecutor;
 import io.quarkiverse.langchain4j.QuarkusJsonCodecFactory;
+import io.quarkiverse.langchain4j.runtime.BlockingToolNotAllowedException;
 import io.quarkiverse.langchain4j.runtime.prompt.Mappable;
 import io.quarkus.virtual.threads.VirtualThreadsRecorder;
 import io.smallrye.mutiny.Uni;
@@ -29,13 +31,23 @@ public class QuarkusToolExecutor implements ToolExecutor {
     private final Context context;
 
     public record Context(Object tool, String toolInvokerName, String methodName, String argumentMapperClassName,
-            ToolMethodCreateInfo.ExecutionModel executionModel, ReturnBehavior returnBehavior) {
+            ToolMethodCreateInfo.ExecutionModel executionModel, ReturnBehavior returnBehavior,
+            boolean propagateToolExecutionExceptions, ToolMethodCreateInfo methodCreateInfo) {
+    }
+
+    /**
+     * Gets the tool method metadata including guardrail configuration.
+     *
+     * @return the method create info, or null if not available
+     */
+    public ToolMethodCreateInfo getMethodCreateInfo() {
+        return context.methodCreateInfo;
     }
 
     public interface Wrapper {
 
         ToolExecutionResult wrap(ToolExecutionRequest toolExecutionRequest, InvocationContext invocationContext,
-                BiFunction<ToolExecutionRequest, InvocationContext, ToolExecutionResult> fun);
+                BiFunction<ToolExecutionRequest, InvocationContext, ToolExecutionResult> fun, QuarkusToolExecutor executor);
     }
 
     public QuarkusToolExecutor(Context context) {
@@ -68,14 +80,14 @@ public class QuarkusToolExecutor implements ToolExecutor {
         switch (context.executionModel) {
             case BLOCKING:
                 if (io.vertx.core.Context.isOnEventLoopThread()) {
-                    throw new IllegalStateException("Cannot execute blocking tools on event loop thread");
+                    throw new BlockingToolNotAllowedException("Cannot execute blocking tools on event loop thread");
                 }
                 return invoke(params, invokerInstance);
             case NON_BLOCKING:
                 return invoke(params, invokerInstance);
             case VIRTUAL_THREAD:
                 if (io.vertx.core.Context.isOnEventLoopThread()) {
-                    throw new IllegalStateException("Cannot execute virtual thread tools on event loop thread");
+                    throw new BlockingToolNotAllowedException("Cannot execute virtual thread tools on event loop thread");
                 }
                 try {
                     return VirtualThreadsRecorder.getCurrent().submit(() -> invoke(params, invokerInstance))
@@ -107,7 +119,7 @@ public class QuarkusToolExecutor implements ToolExecutor {
             String result;
             if (invocationResult instanceof Uni<?>) { // TODO CS
                 if (io.vertx.core.Context.isOnEventLoopThread()) {
-                    throw new IllegalStateException(
+                    throw new BlockingToolNotAllowedException(
                             "Cannot execute tools returning Uni on event loop thread due to a tool executor limitation");
                 }
                 result = handleResult(invokerInstance, ((Uni<?>) invocationResult).await().indefinitely());
@@ -117,15 +129,14 @@ public class QuarkusToolExecutor implements ToolExecutor {
             log.debugv("Tool execution result: {0}", result);
             return ToolExecutionResult.builder().result(invocationResult).resultText(result).build();
         } catch (Exception e) {
-            if (e instanceof IllegalArgumentException) {
-                throw (IllegalArgumentException) e;
-            }
-            if (e instanceof IllegalStateException) {
-                throw (IllegalStateException) e;
-            }
-            log.error("Error while executing tool '" + context.tool.getClass() + "'", e);
-            return ToolExecutionResult.builder().isError(true).resultText(e.getMessage()).build();
+            sneakyThrow(e);
+            // keep the compiler happy
+            return null;
         }
+    }
+
+    private static <E extends Throwable> void sneakyThrow(Throwable e) throws E {
+        throw (E) e;
     }
 
     private static String handleResult(ToolInvoker invokerInstance, Object invocationResult) {
@@ -211,7 +222,7 @@ public class QuarkusToolExecutor implements ToolExecutor {
     }
 
     private void invalidMethodParams(String argumentsJsonStr) {
-        throw new IllegalArgumentException("params '" + argumentsJsonStr
+        throw new ToolArgumentsException("params '" + argumentsJsonStr
                 + "' from request do not map onto the parameters needed by '" + context.tool.getClass().getName() + "#"
                 + context.methodName
                 + "'");

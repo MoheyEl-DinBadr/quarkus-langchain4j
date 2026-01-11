@@ -31,11 +31,12 @@ import dev.langchain4j.mcp.client.transport.McpTransport;
 import io.quarkiverse.langchain4j.mcp.auth.McpClientAuthProvider;
 import io.smallrye.mutiny.Uni;
 import io.smallrye.mutiny.infrastructure.Infrastructure;
+import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
+import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpClient;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.RequestOptions;
-import io.vertx.core.parsetools.RecordParser;
 
 public class QuarkusStreamableHttpMcpTransport implements McpTransport {
 
@@ -49,6 +50,7 @@ public class QuarkusStreamableHttpMcpTransport implements McpTransport {
     private volatile McpOperationHandler operationHandler;
     private final McpClientAuthProvider mcpClientAuthProvider;
     private final HttpClient httpClient;
+    private McpInitializeRequest initializeRequest;
     private volatile SseSubscriber sseSubscriber;
 
     private volatile Runnable onFailure;
@@ -60,7 +62,11 @@ public class QuarkusStreamableHttpMcpTransport implements McpTransport {
         this.httpClient = builder.httpClient;
         this.logRequests = builder.logRequests;
         this.logResponses = builder.logResponses;
-        this.mcpClientAuthProvider = McpClientAuthProvider.resolve(builder.mcpClientName).orElse(null);
+        if (builder.mcpClientAuthProvider != null) {
+            this.mcpClientAuthProvider = builder.mcpClientAuthProvider;
+        } else {
+            this.mcpClientAuthProvider = McpClientAuthProvider.resolve(builder.mcpClientName).orElse(null);
+        }
     }
 
     @Override
@@ -71,6 +77,7 @@ public class QuarkusStreamableHttpMcpTransport implements McpTransport {
 
     @Override
     public CompletableFuture<JsonNode> initialize(McpInitializeRequest request) {
+        this.initializeRequest = request;
         return execute(request, request.getId())
                 .emitOn(Infrastructure.getDefaultWorkerPool())
                 .onItem()
@@ -101,6 +108,10 @@ public class QuarkusStreamableHttpMcpTransport implements McpTransport {
     }
 
     private Uni<JsonNode> execute(McpClientMessage request, Long id) {
+        return execute(request, id, false);
+    }
+
+    private Uni<JsonNode> execute(McpClientMessage request, Long id, boolean isRetry) {
         CompletableFuture<JsonNode> future = new CompletableFuture<>();
         Uni<JsonNode> uni = Uni.createFrom().completionStage(future);
         if (id != null) {
@@ -120,7 +131,7 @@ public class QuarkusStreamableHttpMcpTransport implements McpTransport {
                 .addHeader("Accept", "application/json,text/event-stream")
                 .addHeader("Content-Type", "application/json")
                 .setMethod(HttpMethod.POST);
-        if (mcpSessionId.get() != null) {
+        if (mcpSessionId.get() != null && !(request instanceof McpInitializeRequest)) {
             options.addHeader("Mcp-Session-Id", mcpSessionId.get());
         }
         if (mcpClientAuthProvider != null) {
@@ -147,16 +158,34 @@ public class QuarkusStreamableHttpMcpTransport implements McpTransport {
                                         log.debug("Assigned MCP session ID: " + mcpSessionId);
                                         this.mcpSessionId.set(mcpSessionId);
                                     }
+                                    // Handler that splits SSE events whether they are separated by \r\n\r\n or \n\n
+                                    Handler<Buffer> sseEventparser = new Handler<Buffer>() {
+                                        private StringBuffer sb = new StringBuffer();
 
-                                    RecordParser sseEventparser = RecordParser.newDelimited("\n\n", bodyBuffer -> {
-                                        String responseString = bodyBuffer.toString();
-                                        SseEvent<String> sseEvent = parseSseEvent(responseString);
-                                        sseSubscriber.accept(sseEvent);
-                                    });
-
+                                        @Override
+                                        public void handle(Buffer event) {
+                                            sb.append(event.toString());
+                                            String str = sb.toString();
+                                            if (str.contains("\r\n\r\n")) {
+                                                String[] parts = str.split("\r\n\r\n", 2);
+                                                String eventStr = parts[0];
+                                                sb = new StringBuffer();
+                                                sb.append(parts[1]);
+                                                SseEvent<String> sseEvent = parseSseEvent(eventStr);
+                                                sseSubscriber.accept(sseEvent);
+                                            } else if (str.contains("\n\n")) {
+                                                String[] parts = str.split("\n\n", 2);
+                                                String eventStr = parts[0];
+                                                sb = new StringBuffer();
+                                                sb.append(parts[1]);
+                                                SseEvent<String> sseEvent = parseSseEvent(eventStr);
+                                                sseSubscriber.accept(sseEvent);
+                                            }
+                                        }
+                                    };
                                     String contentType = response.result().getHeader("Content-Type");
                                     if (id != null && contentType != null && contentType.contains("text/event-stream")) {
-                                        // the server has started a SSE channel
+                                        // the server has started an SSE channel
                                         response.result().handler(sseEventparser);
                                     } else {
                                         // the server has sent a single regular response
@@ -179,6 +208,28 @@ public class QuarkusStreamableHttpMcpTransport implements McpTransport {
                                             }
                                         });
                                     }
+                                } else if (!(request instanceof McpInitializeRequest) && response.result().statusCode() == 404
+                                        && !isRetry) {
+                                    log.debug("Received 404 for operation, retrying after re-initialize");
+                                    McpInitializeRequest initReq = QuarkusStreamableHttpMcpTransport.this.initializeRequest;
+                                    if (initReq == null) {
+                                        future.completeExceptionally(
+                                                new IllegalStateException("Cannot retry 404: initializeRequest is null"));
+                                        return;
+                                    }
+                                    initialize(initReq).thenAccept(node -> {
+                                        execute(request, id, true)
+                                                .subscribeAsCompletionStage()
+                                                .thenAccept(future::complete)
+                                                .exceptionally(t -> {
+                                                    future.completeExceptionally(t);
+                                                    return null;
+                                                });
+                                    })
+                                            .exceptionally(t -> {
+                                                future.completeExceptionally(t);
+                                                return null;
+                                            });
                                 } else {
                                     future.completeExceptionally(
                                             new RuntimeException("Unexpected status code: " + response.result().statusCode()));
@@ -198,7 +249,8 @@ public class QuarkusStreamableHttpMcpTransport implements McpTransport {
 
     // FIXME: this may be brittle, is there a more standard way to parse SSE events?
     private SseEvent<String> parseSseEvent(String responseString) {
-        Map<String, String> entries = Arrays.stream(responseString.split("\\n"))
+        // use \\R to match any line ending because some servers use \r\n and some use \n
+        Map<String, String> entries = Arrays.stream(responseString.split("\\R"))
                 .collect(Collectors.toMap(s -> s.substring(0, s.indexOf(":")),
                         s -> s.substring(s.indexOf(":") + 2)));
         return new SseEvent<String>() {
@@ -246,6 +298,7 @@ public class QuarkusStreamableHttpMcpTransport implements McpTransport {
         private boolean logRequests = false;
         private boolean logResponses = false;
         private HttpClient httpClient;
+        private McpClientAuthProvider mcpClientAuthProvider;
 
         /**
          * The initial URL where to connect to the server and request a SSE
@@ -278,6 +331,11 @@ public class QuarkusStreamableHttpMcpTransport implements McpTransport {
 
         public Builder httpClient(HttpClient httpClient) {
             this.httpClient = httpClient;
+            return this;
+        }
+
+        public Builder mcpClientAuthProvider(McpClientAuthProvider mcpClientAuthProvider) {
+            this.mcpClientAuthProvider = mcpClientAuthProvider;
             return this;
         }
 

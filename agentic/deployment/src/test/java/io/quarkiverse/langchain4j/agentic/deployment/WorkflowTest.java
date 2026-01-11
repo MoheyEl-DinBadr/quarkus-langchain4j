@@ -20,7 +20,6 @@ import dev.langchain4j.agentic.declarative.ErrorHandler;
 import dev.langchain4j.agentic.declarative.ExitCondition;
 import dev.langchain4j.agentic.declarative.LoopAgent;
 import dev.langchain4j.agentic.declarative.SequenceAgent;
-import dev.langchain4j.agentic.declarative.SubAgent;
 import dev.langchain4j.agentic.scope.AgenticScope;
 import dev.langchain4j.agentic.scope.ResultWithAgenticScope;
 import dev.langchain4j.service.V;
@@ -34,7 +33,7 @@ public class WorkflowTest extends OpenAiBaseTest {
     @RegisterExtension
     static final QuarkusUnitTest unitTest = new QuarkusUnitTest()
             .setArchiveProducer(() -> ShrinkWrap.create(JavaArchive.class)
-                    .addClasses(StoryCreator.class, StoryCreatorWithErrorRecovery.class,
+                    .addClasses(Agents.class, StoryCreator.class, StoryCreatorWithErrorRecovery.class,
                             CreativeWriter.class, AudienceEditor.class, StyleEditor.class, DummyChatModel.class,
                             StyleReviewLoopAgent.class, StoryCreatorWithReview.class, StyleScorer.class,
                             MedicalExpert.class, TechnicalExpert.class, LegalExpert.class, CategoryRouter.class,
@@ -45,11 +44,7 @@ public class WorkflowTest extends OpenAiBaseTest {
 
     public interface StoryCreator {
 
-        @SequenceAgent(outputName = "story", subAgents = {
-                @SubAgent(type = CreativeWriter.class, outputName = "story"),
-                @SubAgent(type = AudienceEditor.class, outputName = "story"),
-                @SubAgent(type = StyleEditor.class, outputName = "story")
-        })
+        @SequenceAgent(outputKey = "story", subAgents = { CreativeWriter.class, AudienceEditor.class, StyleEditor.class })
         String write(@V("topic") String topic, @V("style") String style, @V("audience") String audience);
     }
 
@@ -96,10 +91,8 @@ public class WorkflowTest extends OpenAiBaseTest {
 
     public interface StyleReviewLoopAgent {
 
-        @LoopAgent(description = "Review the given story to ensure it aligns with the specified style", outputName = "story", maxIterations = 5, subAgents = {
-                @SubAgent(type = StyleScorer.class, outputName = "score"),
-                @SubAgent(type = StyleEditor.class, outputName = "story")
-        })
+        @LoopAgent(description = "Review the given story to ensure it aligns with the specified style", outputKey = "story", maxIterations = 5, subAgents = {
+                StyleScorer.class, StyleEditor.class })
         String write(@V("story") String story);
 
         @ExitCondition
@@ -110,10 +103,7 @@ public class WorkflowTest extends OpenAiBaseTest {
 
     public interface StoryCreatorWithReview {
 
-        @SequenceAgent(outputName = "story", subAgents = {
-                @SubAgent(type = CreativeWriter.class, outputName = "story"),
-                @SubAgent(type = StyleReviewLoopAgent.class, outputName = "story")
-        })
+        @SequenceAgent(outputKey = "story", subAgents = { CreativeWriter.class, StyleReviewLoopAgent.class })
         ResultWithAgenticScope<String> write(@V("topic") String topic, @V("style") String style);
     }
 
@@ -136,11 +126,7 @@ public class WorkflowTest extends OpenAiBaseTest {
 
     public interface ExpertsAgent {
 
-        @ConditionalAgent(outputName = "response", subAgents = {
-                @SubAgent(type = MedicalExpert.class, outputName = "response"),
-                @SubAgent(type = TechnicalExpert.class, outputName = "response"),
-                @SubAgent(type = LegalExpert.class, outputName = "response")
-        })
+        @ConditionalAgent(outputKey = "response", subAgents = { MedicalExpert.class, TechnicalExpert.class, LegalExpert.class })
         String askExpert(@V("request") String request);
 
         @ActivationCondition(MedicalExpert.class)
@@ -161,10 +147,7 @@ public class WorkflowTest extends OpenAiBaseTest {
 
     public interface ExpertRouterAgent {
 
-        @SequenceAgent(outputName = "response", subAgents = {
-                @SubAgent(type = CategoryRouter.class, outputName = "category"),
-                @SubAgent(type = ExpertsAgent.class, outputName = "response")
-        })
+        @SequenceAgent(outputKey = "response", subAgents = { CategoryRouter.class, ExpertsAgent.class })
         ResultWithAgenticScope<String> ask(@V("request") String request);
     }
 

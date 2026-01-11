@@ -40,7 +40,7 @@ public abstract class McpToolsTestBase {
         ToolProviderResult toolProviderResult = toolProvider.provideTools(null);
 
         Map<ToolSpecification, ToolExecutor> tools = toolProviderResult.tools();
-        assertThat(tools).hasSize(6);
+        assertThat(tools).hasSize(13);
 
         ToolSpecification echoString = toolProviderResult.toolSpecificationByName("echoString");
         assertThat(echoString.description()).isEqualTo("Echoes a string");
@@ -58,7 +58,9 @@ public abstract class McpToolsTestBase {
         assertThat(echoBooleanParam.description()).isEqualTo("The boolean to be echoed");
 
         ToolSpecification longOperation = toolProviderResult.toolSpecificationByName("longOperation");
-        assertThat(longOperation.description()).isEqualTo("Takes 10 seconds to complete");
+        assertThat(longOperation.description())
+                .isEqualTo("Takes 10 seconds to complete. "
+                        + "If the execution is cancelled, the wasCancellationReceived tool will start returning true");
         assertThat(longOperation.parameters().properties()).isEmpty();
 
         ToolSpecification error = toolProviderResult.toolSpecificationByName("error");
@@ -68,6 +70,10 @@ public abstract class McpToolsTestBase {
         ToolSpecification errorResponse = toolProviderResult.toolSpecificationByName("errorResponse");
         assertThat(errorResponse.description()).isEqualTo("Returns a response as an error");
         assertThat(errorResponse.parameters().properties()).isEmpty();
+
+        ToolSpecification structuredContent = toolProviderResult.toolSpecificationByName("structuredContent");
+        assertThat(structuredContent.description()).isEqualTo("Returns structured content");
+        assertThat(structuredContent.parameters().properties()).isEmpty();
     }
 
     @Test
@@ -91,20 +97,18 @@ public abstract class McpToolsTestBase {
                 .arguments("{\"input\": 1}") // wrong argument type
                 .build();
         assertThatThrownBy(() -> executor.execute(toolExecutionRequest, null))
-                .isInstanceOf(ToolExecutionException.class);
+                .isInstanceOf(ToolArgumentsException.class);
     }
 
     @Test
     public void executeNonExistentTool() {
         ToolProviderResult toolProviderResult = toolProvider.provideTools(null);
-        ToolExecutor executor = toolProviderResult.toolExecutorByName("echoString");
         ToolExecutionRequest toolExecutionRequest = ToolExecutionRequest.builder()
                 .name("THIS-TOOL-DOES-NOT-EXIST")
                 .arguments("{\"input\": 1}")
                 .build();
-        assertThatThrownBy(() -> executor.execute(toolExecutionRequest, null))
-                .isInstanceOf(ToolArgumentsException.class)
-                .hasMessageContaining("THIS-TOOL-DOES-NOT-EXIST");
+        assertThatThrownBy(() -> mcpClient.executeTool(toolExecutionRequest))
+                .isInstanceOf(ToolArgumentsException.class);
     }
 
     @Test

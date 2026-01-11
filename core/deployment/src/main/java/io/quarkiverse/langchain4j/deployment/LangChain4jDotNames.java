@@ -6,6 +6,9 @@ import dev.langchain4j.data.image.Image;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.pdf.PdfFile;
+import dev.langchain4j.exception.ToolArgumentsException;
+import dev.langchain4j.exception.ToolExecutionException;
+import dev.langchain4j.memory.ChatMemory;
 import dev.langchain4j.memory.chat.ChatMemoryProvider;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
@@ -28,16 +31,26 @@ import dev.langchain4j.service.UserMessage;
 import dev.langchain4j.service.UserName;
 import dev.langchain4j.service.guardrail.InputGuardrails;
 import dev.langchain4j.service.guardrail.OutputGuardrails;
+import dev.langchain4j.service.tool.ToolErrorContext;
+import dev.langchain4j.service.tool.ToolErrorHandlerResult;
 import dev.langchain4j.service.tool.ToolProvider;
 import dev.langchain4j.web.search.WebSearchEngine;
 import dev.langchain4j.web.search.WebSearchTool;
 import io.quarkiverse.langchain4j.AudioUrl;
 import io.quarkiverse.langchain4j.CreatedAware;
+import io.quarkiverse.langchain4j.HandleToolArgumentError;
+import io.quarkiverse.langchain4j.HandleToolExecutionError;
 import io.quarkiverse.langchain4j.ImageUrl;
 import io.quarkiverse.langchain4j.ModelName;
 import io.quarkiverse.langchain4j.PdfUrl;
 import io.quarkiverse.langchain4j.RegisterAiService;
 import io.quarkiverse.langchain4j.SeedMemory;
+import io.quarkiverse.langchain4j.VideoUrl;
+import io.quarkiverse.langchain4j.guardrails.ToolInputGuardrail;
+import io.quarkiverse.langchain4j.guardrails.ToolInputGuardrails;
+import io.quarkiverse.langchain4j.guardrails.ToolOutputGuardrail;
+import io.quarkiverse.langchain4j.guardrails.ToolOutputGuardrails;
+import io.quarkiverse.langchain4j.runtime.aiservice.ChatEvent;
 import io.quarkiverse.langchain4j.runtime.aiservice.QuarkusAiServiceContextQualifier;
 
 public class LangChain4jDotNames {
@@ -51,6 +64,10 @@ public class LangChain4jDotNames {
     public static final DotName TOKEN_STREAM = DotName.createSimple(TokenStream.class);
     public static final DotName OUTPUT_GUARDRAILS = DotName.createSimple(OutputGuardrails.class);
     public static final DotName INPUT_GUARDRAILS = DotName.createSimple(InputGuardrails.class);
+    public static final DotName TOOL_OUTPUT_GUARDRAILS = DotName.createSimple(ToolOutputGuardrails.class);
+    public static final DotName TOOL_INPUT_GUARDRAILS = DotName.createSimple(ToolInputGuardrails.class);
+    public static final DotName TOOL_OUTPUT_GUARDRAIL = DotName.createSimple(ToolOutputGuardrail.class);
+    public static final DotName TOOL_INPUT_GUARDRAIL = DotName.createSimple(ToolInputGuardrail.class);
     static final DotName AI_SERVICES = DotName.createSimple(AiServices.class);
     static final DotName CREATED_AWARE = DotName.createSimple(CreatedAware.class);
     public static final DotName SYSTEM_MESSAGE = DotName.createSimple(SystemMessage.class);
@@ -60,12 +77,13 @@ public class LangChain4jDotNames {
     static final DotName IMAGE_URL = DotName.createSimple(ImageUrl.class);
     static final DotName AUDIO_URL = DotName.createSimple(AudioUrl.class);
     static final DotName PDF_URL = DotName.createSimple(PdfUrl.class);
+    static final DotName VIDEO_URL = DotName.createSimple(VideoUrl.class);
     static final DotName MODERATE = DotName.createSimple(Moderate.class);
     static final DotName MEMORY_ID = DotName.createSimple(MemoryId.class);
     static final DotName DESCRIPTION = DotName.createSimple(Description.class);
     static final DotName STRUCTURED_PROMPT = DotName.createSimple(StructuredPrompt.class);
     static final DotName STRUCTURED_PROMPT_PROCESSOR = DotName.createSimple(StructuredPromptProcessor.class);
-    static final DotName V = DotName.createSimple(dev.langchain4j.service.V.class);
+    public static final DotName V = DotName.createSimple(dev.langchain4j.service.V.class);
 
     public static final DotName MODEL_NAME = DotName.createSimple(ModelName.class);
     public static final DotName REGISTER_AI_SERVICES = DotName.createSimple(RegisterAiService.class);
@@ -84,11 +102,11 @@ public class LangChain4jDotNames {
     static final DotName NO_CHAT_MEMORY_PROVIDER_SUPPLIER = DotName.createSimple(
             RegisterAiService.NoChatMemoryProviderSupplier.class);
 
-    static final DotName RETRIEVER = DotName.createSimple(ContentRetriever.class);
+    public static final DotName RETRIEVER = DotName.createSimple(ContentRetriever.class);
     static final DotName NO_RETRIEVER = DotName.createSimple(
             RegisterAiService.NoRetriever.class);
 
-    static final DotName RETRIEVAL_AUGMENTOR = DotName.createSimple(RetrievalAugmentor.class);
+    public static final DotName RETRIEVAL_AUGMENTOR = DotName.createSimple(RetrievalAugmentor.class);
     static final DotName BEAN_IF_EXISTS_RETRIEVAL_AUGMENTOR_SUPPLIER = DotName.createSimple(
             RegisterAiService.BeanIfExistsRetrievalAugmentorSupplier.class);
 
@@ -112,11 +130,23 @@ public class LangChain4jDotNames {
 
     static final DotName SEED_MEMORY = DotName.createSimple(SeedMemory.class);
 
+    static final DotName HANDLE_TOOL_ARGUMENT_ERROR = DotName.createSimple(HandleToolArgumentError.class);
+    static final DotName HANDLE_TOOL_EXECUTION_ERROR = DotName.createSimple(HandleToolExecutionError.class);
+
     static final DotName WEB_SEARCH_TOOL = DotName.createSimple(WebSearchTool.class);
     static final DotName WEB_SEARCH_ENGINE = DotName.createSimple(WebSearchEngine.class);
     static final DotName IMAGE = DotName.createSimple(Image.class);
     static final DotName AUDIO = DotName.createSimple(dev.langchain4j.data.audio.Audio.class);
     static final DotName PDF_FILE = DotName.createSimple(PdfFile.class);
+    static final DotName VIDEO = DotName.createSimple(dev.langchain4j.data.video.Video.class);
     static final DotName RESULT = DotName.createSimple(Result.class);
-    static final DotName TOOL_PROVIDER = DotName.createSimple(ToolProvider.class);
+    public static final DotName TOOL_PROVIDER = DotName.createSimple(ToolProvider.class);
+    // Using the class name to keep the McpToolBox annotation in the mcp module
+    public static final DotName MCP_TOOLBOX = DotName.createSimple("io.quarkiverse.langchain4j.mcp.runtime.McpToolBox");
+    public static final DotName CHAT_EVENT = DotName.createSimple(ChatEvent.class);
+    public static final DotName CHAT_MEMORY = DotName.createSimple(ChatMemory.class);
+    public static final DotName TOOL_ERROR_HANDLER_RESULT = DotName.createSimple(ToolErrorHandlerResult.class);
+    public static final DotName TOOL_ARGUMENTS_EXCEPTION = DotName.createSimple(ToolArgumentsException.class);
+    public static final DotName TOOL_EXECUTION_EXCEPTION = DotName.createSimple(ToolExecutionException.class);
+    public static final DotName TOOL_ERROR_CONTEXT = DotName.createSimple(ToolErrorContext.class);
 }

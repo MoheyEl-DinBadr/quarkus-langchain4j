@@ -1,8 +1,5 @@
 package io.quarkiverse.langchain4j.anthropic;
 
-import static dev.langchain4j.internal.InternalStreamingChatResponseHandlerUtils.onCompleteToolCall;
-import static dev.langchain4j.internal.InternalStreamingChatResponseHandlerUtils.onPartialThinking;
-import static dev.langchain4j.internal.InternalStreamingChatResponseHandlerUtils.onPartialToolCall;
 import static dev.langchain4j.internal.Utils.isNotNullOrBlank;
 import static dev.langchain4j.internal.Utils.isNotNullOrEmpty;
 import static dev.langchain4j.internal.Utils.isNullOrEmpty;
@@ -44,8 +41,14 @@ import dev.langchain4j.model.anthropic.internal.client.AnthropicClientBuilderFac
 import dev.langchain4j.model.anthropic.internal.client.AnthropicCreateMessageOptions;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.CompleteToolCall;
+import dev.langchain4j.model.chat.response.PartialResponse;
+import dev.langchain4j.model.chat.response.PartialResponseContext;
+import dev.langchain4j.model.chat.response.PartialThinking;
+import dev.langchain4j.model.chat.response.PartialThinkingContext;
 import dev.langchain4j.model.chat.response.PartialToolCall;
+import dev.langchain4j.model.chat.response.PartialToolCallContext;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
+import dev.langchain4j.model.chat.response.StreamingHandle;
 import dev.langchain4j.model.output.TokenUsage;
 import io.quarkus.rest.client.reactive.QuarkusRestClientBuilder;
 import io.smallrye.mutiny.subscription.MultiSubscriber;
@@ -59,11 +62,13 @@ public class QuarkusAnthropicClient extends AnthropicClient {
     public static final String BETA = "tools-2024-04-04";
     private final String apiKey;
     private final String anthropicVersion;
+    private final String configuredBeta;
     private final AnthropicRestApi restApi;
 
     public QuarkusAnthropicClient(Builder builder) {
         this.apiKey = builder.apiKey;
         this.anthropicVersion = builder.version;
+        this.configuredBeta = builder.beta;
 
         try {
             var restApiBuilder = QuarkusRestClientBuilder.newBuilder().baseUri(new URI(builder.baseUrl))
@@ -104,10 +109,33 @@ public class QuarkusAnthropicClient extends AnthropicClient {
         var builder = AnthropicRestApi.ApiMetadata.builder()
                 .apiKey(apiKey)
                 .anthropicVersion(anthropicVersion);
-        if (hasTools(request)) {
-            builder.beta(BETA);
+
+        String betaHeader = buildBetaHeaderForRequest(request);
+        if (betaHeader != null) {
+            builder.beta(betaHeader);
         }
+
         return builder.build();
+    }
+
+    private String buildBetaHeaderForRequest(AnthropicCreateMessageRequest request) {
+        boolean toolsPresent = hasTools(request);
+
+        // If beta configured, use it (may need to combine with tools beta)
+        if (configuredBeta != null) {
+            // If tools present and tools beta not already in configured header
+            if (toolsPresent && !configuredBeta.contains("tools-")) {
+                return BETA + "," + configuredBeta;
+            }
+            return configuredBeta;
+        }
+
+        // Backward compatibility: default tools beta when tools present
+        if (toolsPresent) {
+            return BETA;
+        }
+
+        return null;
     }
 
     private boolean hasTools(AnthropicCreateMessageRequest request) {
@@ -127,6 +155,8 @@ public class QuarkusAnthropicClient extends AnthropicClient {
     }
 
     private static class AnthropicStreamingSubscriber implements MultiSubscriber<AnthropicStreamingData> {
+        private static final Logger log = Logger.getLogger(AnthropicStreamingSubscriber.class);
+
         private final StreamingChatResponseHandler handler;
         private Subscription subscription;
         private volatile AtomicReference<StringBuffer> contentBuilder = new AtomicReference<>(new StringBuffer());
@@ -143,10 +173,30 @@ public class QuarkusAnthropicClient extends AnthropicClient {
         private final List<String> thinkingSignatures = synchronizedList(new ArrayList<>());
         private final List<String> redactedThinkings = synchronizedList(new ArrayList<>());
         private final AnthropicCreateMessageOptions options;
+        private volatile boolean completionHandled = false;
+        private final AnthropicStreamingHandle streamingHandle = new AnthropicStreamingHandle();
 
         private AnthropicStreamingSubscriber(StreamingChatResponseHandler handler, AnthropicCreateMessageOptions options) {
             this.handler = handler;
             this.options = options;
+        }
+
+        private class AnthropicStreamingHandle implements StreamingHandle {
+            private volatile boolean cancelled = false;
+
+            @Override
+            public void cancel() {
+                log.debug("Streaming cancelled by client");
+                cancelled = true;
+                if (subscription != null) {
+                    subscription.cancel();
+                }
+            }
+
+            @Override
+            public boolean isCancelled() {
+                return cancelled;
+            }
         }
 
         @Override
@@ -210,13 +260,17 @@ public class QuarkusAnthropicClient extends AnthropicClient {
 
                 if (isNotNullOrEmpty(text)) {
                     contentBuilder.get().append(text);
-                    handler.onPartialResponse(text);
+                    handler.onPartialResponse(
+                            new PartialResponse(text),
+                            new PartialResponseContext(streamingHandle));
                 }
             } else if ("thinking".equals(currentContentBlockStartType) && options.returnThinking()) {
                 String thinking = data.contentBlock.thinking;
                 if (isNotNullOrEmpty(thinking)) {
                     thinkingBuilder.append(thinking);
-                    onPartialThinking(handler, thinking);
+                    handler.onPartialThinking(
+                            new PartialThinking(thinking),
+                            new PartialThinkingContext(streamingHandle));
                 }
                 String signature = data.contentBlock.signature;
                 if (isNotNullOrEmpty(signature)) {
@@ -244,13 +298,17 @@ public class QuarkusAnthropicClient extends AnthropicClient {
 
                 if (isNotNullOrEmpty(text)) {
                     contentBuilder.get().append(text);
-                    handler.onPartialResponse(text);
+                    handler.onPartialResponse(
+                            new PartialResponse(text),
+                            new PartialResponseContext(streamingHandle));
                 }
             } else if ("thinking".equals(currentContentBlockStartType) && options.returnThinking()) {
                 String thinking = data.delta.thinking;
                 if (isNotNullOrEmpty(thinking)) {
                     thinkingBuilder.append(thinking);
-                    onPartialThinking(handler, thinking);
+                    handler.onPartialThinking(
+                            new PartialThinking(thinking),
+                            new PartialThinkingContext(streamingHandle));
                 }
                 String signature = data.delta.signature;
                 if (isNotNullOrEmpty(signature)) {
@@ -272,7 +330,9 @@ public class QuarkusAnthropicClient extends AnthropicClient {
                             .name(toolCallBuilder.name())
                             .partialArguments(partialJson)
                             .build();
-                    onPartialToolCall(handler, partialToolRequest);
+                    handler.onPartialToolCall(
+                            partialToolRequest,
+                            new PartialToolCallContext(streamingHandle));
                 }
             }
         }
@@ -294,10 +354,12 @@ public class QuarkusAnthropicClient extends AnthropicClient {
                             .name(completeToolCall.toolExecutionRequest().name())
                             .partialArguments(completeToolCall.toolExecutionRequest().arguments())
                             .build();
-                    onPartialToolCall(handler, partialToolRequest);
+                    handler.onPartialToolCall(
+                            partialToolRequest,
+                            new PartialToolCallContext(streamingHandle));
                 }
 
-                onCompleteToolCall(handler, completeToolCall);
+                handler.onCompleteToolCall(completeToolCall);
             }
         }
 
@@ -316,6 +378,7 @@ public class QuarkusAnthropicClient extends AnthropicClient {
         }
 
         private void handleMessageStop() {
+            completionHandled = true;
             ChatResponse response = build();
             handler.onCompleteResponse(response);
         }
@@ -365,11 +428,17 @@ public class QuarkusAnthropicClient extends AnthropicClient {
 
         @Override
         public void onFailure(Throwable failure) {
+            completionHandled = true;
             handler.onError(failure);
         }
 
         @Override
         public void onCompletion() {
+            if (!completionHandled) {
+                handler.onError(new RuntimeException(
+                        "Stream terminated unexpectedly without message_stop event. " +
+                                "This may indicate a rate limit (429), server overload (529), or connection issue."));
+            }
         }
 
         @Override

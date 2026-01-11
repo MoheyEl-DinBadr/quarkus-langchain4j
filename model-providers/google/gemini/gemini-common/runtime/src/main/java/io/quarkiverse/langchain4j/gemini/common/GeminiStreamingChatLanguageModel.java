@@ -4,11 +4,7 @@ import static dev.langchain4j.internal.InternalStreamingChatResponseHandlerUtils
 import static dev.langchain4j.internal.Utils.getOrDefault;
 import static dev.langchain4j.model.chat.Capability.RESPONSE_FORMAT_JSON_SCHEMA;
 
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
@@ -27,7 +23,6 @@ import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.request.ChatRequestParameters;
 import dev.langchain4j.model.chat.request.ResponseFormat;
 import dev.langchain4j.model.chat.request.ResponseFormatType;
-import dev.langchain4j.model.chat.request.json.JsonEnumSchema;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import io.smallrye.mutiny.Multi;
@@ -35,8 +30,8 @@ import io.smallrye.mutiny.Multi;
 public abstract class GeminiStreamingChatLanguageModel extends BaseGeminiChatModel implements StreamingChatModel {
 
     public GeminiStreamingChatLanguageModel(String modelId, Double temperature, Integer maxOutputTokens, Integer topK,
-            Double topP, ResponseFormat responseFormat, List<ChatModelListener> listeners) {
-        super(modelId, temperature, maxOutputTokens, topK, topP, responseFormat, listeners, null, false);
+            Double topP, ResponseFormat responseFormat, List<ChatModelListener> listeners, boolean useGoogleSearch) {
+        super(modelId, temperature, maxOutputTokens, topK, topP, responseFormat, listeners, null, false, useGoogleSearch);
     }
 
     @Override
@@ -55,19 +50,19 @@ public abstract class GeminiStreamingChatLanguageModel extends BaseGeminiChatMod
     public void doChat(ChatRequest chatRequest, StreamingChatResponseHandler aHandler) {
         ChatRequestParameters requestParameters = chatRequest.parameters();
         ResponseFormat effectiveResponseFormat = getOrDefault(requestParameters.responseFormat(), responseFormat);
+        Schema schema = detectSchema(effectiveResponseFormat);
+
         GenerationConfig generationConfig = GenerationConfig.builder()
                 .maxOutputTokens(getOrDefault(requestParameters.maxOutputTokens(), this.maxOutputTokens))
-                .responseMimeType(computeMimeType(effectiveResponseFormat))
-                .responseSchema(effectiveResponseFormat != null
-                        ? SchemaMapper.fromJsonSchemaToSchema(effectiveResponseFormat.jsonSchema())
-                        : null)
+                .responseMimeType(computeMimeType(effectiveResponseFormat, schema))
+                .responseSchema(schema)
                 .stopSequences(requestParameters.stopSequences())
                 .temperature(getOrDefault(requestParameters.temperature(), this.temperature))
                 .topK(getOrDefault(requestParameters.topK(), this.topK))
                 .topP(getOrDefault(requestParameters.topP(), this.topP))
                 .build();
         GenerateContentRequest request = ContentMapper.map(chatRequest.messages(), chatRequest.toolSpecifications(),
-                generationConfig);
+                generationConfig, this.modelId, this.useGoogleSearch);
 
         ChatRequest modelListenerRequest = createModelListenerRequest(request, chatRequest.messages(),
                 chatRequest.toolSpecifications());
@@ -122,21 +117,6 @@ public abstract class GeminiStreamingChatLanguageModel extends BaseGeminiChatMod
                         .maxOutputTokens(maxOutputTokens)
                         .build());
         return builder.build();
-    }
-
-    private String computeMimeType(ResponseFormat responseFormat) {
-        if (responseFormat == null || ResponseFormatType.TEXT.equals(responseFormat.type())) {
-            return "text/plain";
-        }
-
-        if (ResponseFormatType.JSON.equals(responseFormat.type())
-                && responseFormat.jsonSchema() != null
-                && responseFormat.jsonSchema().rootElement() != null
-                && responseFormat.jsonSchema().rootElement() instanceof JsonEnumSchema) {
-            return "text/x.enum";
-        }
-
-        return "application/json";
     }
 
     private static class OnCompleteRunnable implements Runnable {

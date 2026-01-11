@@ -13,9 +13,11 @@ import java.util.function.Consumer;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.invocation.InvocationContext;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.PartialThinking;
+import dev.langchain4j.model.chat.response.StreamingHandle;
 import dev.langchain4j.model.output.Response;
 import dev.langchain4j.model.output.TokenUsage;
 import dev.langchain4j.rag.content.Content;
@@ -39,8 +41,11 @@ public class QuarkusAiServiceTokenStream implements TokenStream {
     private final List<ToolSpecification> toolSpecifications;
     private final Map<String, ToolExecutor> toolExecutors;
     private final List<Content> retrievedContents;
-    private final AiServiceContext context;
+    private final QuarkusAiServiceContext context;
+    private final InvocationContext invocationContext;
     private final Object memoryId;
+    private final AiServiceMethodCreateInfo methodCreateInfo;
+    private final Object[] methodArgs;
     private final Context cxtx;
     private final boolean switchToWorkerThreadForToolExecution;
     private final boolean switchToWorkerForEmission;
@@ -51,6 +56,7 @@ public class QuarkusAiServiceTokenStream implements TokenStream {
     private Consumer<Throwable> errorHandler;
     private Consumer<Response<AiMessage>> completionHandler;
     private Consumer<BeforeToolExecution> beforeToolExecutionHandler;
+    private Consumer<ChatResponse> intermediateResponseHandler;
     private Consumer<ToolExecution> toolExecuteHandler;
     private Consumer<ChatResponse> completeResponseHandler;
 
@@ -61,21 +67,28 @@ public class QuarkusAiServiceTokenStream implements TokenStream {
     private int onErrorInvoked;
     private int ignoreErrorsInvoked;
     private int beforeToolExecutionInvoked;
+    private int onIntermediateResponseInvoked;
     private int toolExecuteInvoked;
+
+    private volatile QuarkusAiServiceStreamingResponseHandler handler;
 
     public QuarkusAiServiceTokenStream(List<ChatMessage> messages,
             List<ToolSpecification> toolSpecifications,
             Map<String, ToolExecutor> toolExecutors,
             List<Content> retrievedContents,
-            AiServiceContext context,
+            QuarkusAiServiceContext context, InvocationContext invocationContext,
             Object memoryId, Context ctxt, boolean switchToWorkerThreadForToolExecution,
-            boolean switchToWorkerForEmission) {
+            boolean switchToWorkerForEmission, AiServiceMethodCreateInfo methodCreateInfo,
+            Object[] methodArgs) {
         this.messages = ensureNotEmpty(messages, "messages");
         this.toolSpecifications = copyIfNotNull(toolSpecifications);
         this.toolExecutors = copyIfNotNull(toolExecutors);
         this.retrievedContents = retrievedContents;
         this.context = ensureNotNull(context, "context");
+        this.invocationContext = ensureNotNull(invocationContext, "invocationContext");
         this.memoryId = ensureNotNull(memoryId, "memoryId");
+        this.methodCreateInfo = methodCreateInfo;
+        this.methodArgs = methodArgs;
         ensureNotNull(context.streamingChatModel, "streamingChatModel");
         this.cxtx = ctxt; // If set, it means we need to handle the context propagation.
         this.switchToWorkerThreadForToolExecution = switchToWorkerThreadForToolExecution; // If true, we need to switch to a worker thread to execute tools.
@@ -118,6 +131,13 @@ public class QuarkusAiServiceTokenStream implements TokenStream {
     }
 
     @Override
+    public TokenStream onIntermediateResponse(Consumer<ChatResponse> intermediateResponseHandler) {
+        this.intermediateResponseHandler = intermediateResponseHandler;
+        this.onIntermediateResponseInvoked++;
+        return this;
+    }
+
+    @Override
     public TokenStream onCompleteResponse(Consumer<ChatResponse> completionHandler) {
         this.completeResponseHandler = completionHandler;
         this.onCompleteResponseInvoked++;
@@ -146,12 +166,15 @@ public class QuarkusAiServiceTokenStream implements TokenStream {
                 .toolSpecifications(toolSpecifications)
                 .build();
 
-        QuarkusAiServiceStreamingResponseHandler handler = new QuarkusAiServiceStreamingResponseHandler(
+        this.handler = new QuarkusAiServiceStreamingResponseHandler(
+                chatRequest,
                 context,
+                invocationContext,
                 memoryId,
                 partialResponseHandler,
                 partialThinkingHandler,
                 beforeToolExecutionHandler,
+                intermediateResponseHandler,
                 toolExecuteHandler,
                 completeResponseHandler,
                 completionHandler,
@@ -162,7 +185,7 @@ public class QuarkusAiServiceTokenStream implements TokenStream {
                 toolExecutors,
                 switchToWorkerThreadForToolExecution,
                 switchToWorkerForEmission,
-                cxtx);
+                cxtx, methodCreateInfo, methodArgs);
 
         if (contentsHandler != null && retrievedContents != null) {
             contentsHandler.accept(retrievedContents);
@@ -170,12 +193,24 @@ public class QuarkusAiServiceTokenStream implements TokenStream {
 
         try {
             // Some model do not support function calling with tool specifications
-            context.streamingChatModel.chat(chatRequest, handler);
+            context.effectiveStreamingChatModel(methodCreateInfo, methodArgs).chat(chatRequest, handler);
         } catch (Exception e) {
             if (errorHandler != null) {
                 errorHandler.accept(e);
             }
         }
+    }
+
+    /**
+     * Returns the StreamingHandle that can be used to cancel the underlying stream.
+     * <p>
+     * Returns {@code null} if streaming has not started yet, or a {@link NoopStreamingHandle}
+     * if the handler has not received any partial responses.
+     *
+     * @apiNote This uses langchain4j's experimental StreamingHandle API (since 1.8.0)
+     */
+    public StreamingHandle getStreamingHandle() {
+        return handler != null ? handler.getStreamingHandle() : null;
     }
 
     private void validateConfiguration() {
@@ -203,6 +238,10 @@ public class QuarkusAiServiceTokenStream implements TokenStream {
 
         if (onPartialThinkingInvoked > 1) {
             throw new IllegalConfigurationException("onPartialThinking can be invoked on TokenStream at most 1 time");
+        }
+
+        if (onIntermediateResponseInvoked > 1) {
+            throw new IllegalConfigurationException("onIntermediateResponse can be invoked on TokenStream at most 1 time");
         }
 
         if (onErrorInvoked + ignoreErrorsInvoked != 1) {

@@ -86,10 +86,9 @@ public class JaxRsHttpClient implements HttpClient {
                     return tlsConfiguration.isTrustAll();
                 }
 
-                // TODO: when we bump to the next LTS, this needs to be implemented properly
-                //for the time being it exists only to make the module compile against the SNAPSHOT version of Quarkus
+                @Override
                 public Optional<String> getName() {
-                    throw new IllegalStateException("this should not be called");
+                    return Optional.ofNullable(tlsConfiguration.getName());
                 }
             });
         }
@@ -108,7 +107,9 @@ public class JaxRsHttpClient implements HttpClient {
         for (var headers : request.headers().entrySet()) {
             List<String> values = headers.getValue();
             if ((values != null) && (!values.isEmpty())) {
-                invocationBuilder.header(headers.getKey(), values);
+                for (String value : values) {
+                    invocationBuilder.header(headers.getKey(), value);
+                }
             }
         }
 

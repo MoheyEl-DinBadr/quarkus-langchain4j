@@ -25,7 +25,10 @@ public record DeclarativeAiServiceCreateInfo(
         boolean needsModerationModel,
         boolean needsImageModel,
         String toolHallucinationStrategyClassName,
+        String toolArgumentsErrorHandlerClassName,
+        String toolExecutionErrorHandlerClassName,
         InputGuardrailsLiteral inputGuardrails,
         OutputGuardrailsLiteral outputGuardrails,
-        Integer maxSequentialToolInvocations) {
+        Integer maxSequentialToolInvocations,
+        boolean allowContinuousForcedToolCalling) {
 }

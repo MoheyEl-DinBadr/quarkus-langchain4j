@@ -2,6 +2,9 @@ package io.quarkiverse.langchain4j.gemini.common;
 
 import java.util.List;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+
+@JsonIgnoreProperties(ignoreUnknown = true)
 public record GenerateContentResponse(List<Candidate> candidates, UsageMetadata usageMetadata, String modelVersion,
         String responseId) {
 
@@ -11,7 +14,7 @@ public record GenerateContentResponse(List<Candidate> candidates, UsageMetadata 
 
         }
 
-        public record Part(String text, FunctionCall functionCall, Boolean thought) {
+        public record Part(String text, FunctionCall functionCall, Boolean thought, String thoughtSignature) {
 
         }
 

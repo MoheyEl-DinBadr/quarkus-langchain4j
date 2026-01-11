@@ -25,16 +25,13 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.Callable;
-import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Flow;
 import java.util.concurrent.Future;
 import java.util.function.Function;
-import java.util.function.Supplier;
-
-import jakarta.enterprise.inject.spi.BeanManager;
 
 import org.eclipse.microprofile.config.ConfigProvider;
+import org.eclipse.microprofile.context.ManagedExecutor;
 import org.jboss.logging.Logger;
 
 import dev.langchain4j.agent.tool.ReturnBehavior;
@@ -45,13 +42,17 @@ import dev.langchain4j.data.image.Image;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.AudioContent;
 import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.Content;
 import dev.langchain4j.data.message.ImageContent;
 import dev.langchain4j.data.message.PdfFileContent;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.TextContent;
 import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.data.message.VideoContent;
 import dev.langchain4j.data.pdf.PdfFile;
+import dev.langchain4j.data.video.Video;
+import dev.langchain4j.exception.ToolArgumentsException;
 import dev.langchain4j.guardrail.ChatExecutor;
 import dev.langchain4j.guardrail.GuardrailRequestParams;
 import dev.langchain4j.invocation.InvocationContext;
@@ -73,6 +74,10 @@ import dev.langchain4j.model.moderation.Moderation;
 import dev.langchain4j.model.output.FinishReason;
 import dev.langchain4j.model.output.Response;
 import dev.langchain4j.model.output.TokenUsage;
+import dev.langchain4j.observability.api.event.AiServiceCompletedEvent;
+import dev.langchain4j.observability.api.event.AiServiceErrorEvent;
+import dev.langchain4j.observability.api.event.AiServiceResponseReceivedEvent;
+import dev.langchain4j.observability.api.event.AiServiceStartedEvent;
 import dev.langchain4j.rag.AugmentationRequest;
 import dev.langchain4j.rag.AugmentationResult;
 import dev.langchain4j.rag.query.Metadata;
@@ -82,33 +87,33 @@ import dev.langchain4j.service.AiServiceTokenStreamParameters;
 import dev.langchain4j.service.IllegalConfigurationException;
 import dev.langchain4j.service.Result;
 import dev.langchain4j.service.output.ServiceOutputParser;
+import dev.langchain4j.service.tool.ToolArgumentsErrorHandler;
+import dev.langchain4j.service.tool.ToolErrorContext;
 import dev.langchain4j.service.tool.ToolErrorHandlerResult;
 import dev.langchain4j.service.tool.ToolExecution;
+import dev.langchain4j.service.tool.ToolExecutionErrorHandler;
 import dev.langchain4j.service.tool.ToolExecutionResult;
 import dev.langchain4j.service.tool.ToolExecutor;
 import dev.langchain4j.service.tool.ToolProviderRequest;
 import dev.langchain4j.service.tool.ToolProviderResult;
 import dev.langchain4j.spi.ServiceHelper;
-import io.quarkiverse.langchain4j.audit.AuditSourceInfo;
-import io.quarkiverse.langchain4j.audit.InitialMessagesCreatedEvent;
-import io.quarkiverse.langchain4j.audit.LLMInteractionCompleteEvent;
-import io.quarkiverse.langchain4j.audit.LLMInteractionFailureEvent;
-import io.quarkiverse.langchain4j.audit.ResponseFromLLMReceivedEvent;
-import io.quarkiverse.langchain4j.audit.ToolExecutedEvent;
-import io.quarkiverse.langchain4j.audit.internal.DefaultInitialMessagesCreatedEvent;
-import io.quarkiverse.langchain4j.audit.internal.DefaultLLMInteractionCompleteEvent;
-import io.quarkiverse.langchain4j.audit.internal.DefaultLLMInteractionFailureEvent;
-import io.quarkiverse.langchain4j.audit.internal.DefaultResponseFromLLMReceivedEvent;
-import io.quarkiverse.langchain4j.audit.internal.DefaultToolExecutedEvent;
+import io.quarkiverse.langchain4j.AudioUrl;
+import io.quarkiverse.langchain4j.ImageUrl;
+import io.quarkiverse.langchain4j.PdfUrl;
+import io.quarkiverse.langchain4j.VideoUrl;
 import io.quarkiverse.langchain4j.response.ResponseAugmenterParams;
 import io.quarkiverse.langchain4j.runtime.ContextLocals;
+import io.quarkiverse.langchain4j.runtime.PreventsErrorHandlerExecution;
 import io.quarkiverse.langchain4j.runtime.QuarkusServiceOutputParser;
 import io.quarkiverse.langchain4j.runtime.ResponseSchemaUtil;
 import io.quarkiverse.langchain4j.runtime.aiservice.GuardrailsSupport.OutputGuardrailStreamingMapper;
 import io.quarkiverse.langchain4j.runtime.tool.QuarkusToolExecutor;
+import io.quarkiverse.langchain4j.runtime.types.TypeSignatureParser;
 import io.quarkiverse.langchain4j.runtime.types.TypeUtil;
 import io.quarkiverse.langchain4j.spi.DefaultMemoryIdProvider;
 import io.quarkus.arc.Arc;
+import io.quarkus.arc.InstanceHandle;
+import io.quarkus.runtime.BlockingOperationControl;
 import io.smallrye.mutiny.Multi;
 import io.smallrye.mutiny.infrastructure.Infrastructure;
 import io.vertx.core.Context;
@@ -156,38 +161,52 @@ public class AiServiceMethodImplementationSupport {
         AiServiceMethodCreateInfo createInfo = input.createInfo;
         Object[] methodArgs = input.methodArgs;
 
-        /**
-         * @deprecated In favor of https://docs.langchain4j.dev/tutorials/observability#ai-service-observability
-         */
-        var auditSourceInfo = new AuditSourceInfoImpl(createInfo, methodArgs);
-        var beanManager = Arc.container().beanManager();
+        InvocationContext invocationContext = InvocationContext.builder()
+                .invocationId(UUID.randomUUID())
+                .interfaceName(context.aiServiceClass.getName())
+                .methodName(createInfo.getMethodName())
+                .methodArguments((methodArgs != null) ? Arrays.asList(methodArgs) : List.of())
+                .chatMemoryId(memoryId(createInfo, methodArgs, context.hasChatMemory()))
+                .invocationParameters(findInvocationParams(methodArgs))
+                .timestampNow()
+                .build();
 
         // TODO: add validation
         try {
-            var result = doImplement(createInfo, methodArgs, context, auditSourceInfo);
-
-            /**
-             * @deprecated In favor of https://docs.langchain4j.dev/tutorials/observability#ai-service-observability
-             */
-            beanManager.getEvent().select(LLMInteractionCompleteEvent.class)
-                    .fire(new DefaultLLMInteractionCompleteEvent(auditSourceInfo, result));
+            var result = doImplement(createInfo, invocationContext, context);
 
             return result;
         } catch (Exception e) {
-            /**
-             * @deprecated In favor of https://docs.langchain4j.dev/tutorials/observability#ai-service-observability
-             */
-            beanManager.getEvent().select(LLMInteractionFailureEvent.class)
-                    .fire(new DefaultLLMInteractionFailureEvent(auditSourceInfo, e));
+
+            // New firing
+            context.eventListenerRegistrar.fireEvent(
+                    AiServiceErrorEvent.builder()
+                            .invocationContext(invocationContext)
+                            .error(e)
+                            .build());
 
             throw e;
         }
     }
 
-    private static Object doImplement(AiServiceMethodCreateInfo methodCreateInfo, Object[] methodArgs,
-            QuarkusAiServiceContext context, AuditSourceInfo auditSourceInfo) {
+    private static Object doImplement(AiServiceMethodCreateInfo methodCreateInfo, InvocationContext invocationContext,
+            QuarkusAiServiceContext context) {
+        if (TypeUtil.isMulti(methodCreateInfo.getReturnType()) && !BlockingOperationControl.isBlockingAllowed()) {
+            // this a special case where we can't block, so we need to delegate the to a worker pool
+            // as so many of the things done in LangChain4j are blocking
+            return Multi.createFrom().deferred(
+                    () -> ((Multi<?>) doImplement0(methodCreateInfo, invocationContext, context)))
+                    .runSubscriptionOn(createExecutor());
+        } else {
+            return doImplement0(methodCreateInfo, invocationContext, context);
+        }
+    }
+
+    private static Object doImplement0(AiServiceMethodCreateInfo methodCreateInfo, InvocationContext invocationContext,
+            QuarkusAiServiceContext context) {
         boolean isRunningOnWorkerThread = !Context.isOnEventLoopThread();
-        Object memoryId = memoryId(methodCreateInfo, methodArgs, context.hasChatMemory());
+        Object[] methodArgs = invocationContext.methodArguments().toArray(Object[]::new);
+        Object memoryId = invocationContext.chatMemoryId();
         Optional<SystemMessage> systemMessage = prepareSystemMessage(methodCreateInfo, methodArgs, context, memoryId);
 
         boolean supportsJsonSchema = supportsJsonSchema(context, methodCreateInfo, methodArgs);
@@ -201,16 +220,18 @@ public class AiServiceMethodImplementationSupport {
         final boolean isStringMulti = (isMulti && returnType instanceof ParameterizedType
                 && TypeUtil.isTypeOf(((ParameterizedType) returnType).getActualTypeArguments()[0], String.class));
         if (TypeUtil.isImage(returnType) || TypeUtil.isResultImage(returnType)) {
-            return doImplementGenerateImage(methodCreateInfo, context, systemMessage, userMessage, memoryId, returnType,
-                    templateVariables, auditSourceInfo);
+            return doImplementGenerateImage(methodCreateInfo, context, invocationContext, systemMessage, userMessage, memoryId,
+                    returnType,
+                    templateVariables);
         }
 
-        var beanManager = Arc.container().beanManager();
-        /**
-         * @deprecated In favor of https://docs.langchain4j.dev/tutorials/observability#ai-service-observability
-         */
-        beanManager.getEvent().select(InitialMessagesCreatedEvent.class)
-                .fire(new DefaultInitialMessagesCreatedEvent(auditSourceInfo, systemMessage, userMessage));
+        // New firing
+        context.eventListenerRegistrar.fireEvent(
+                AiServiceStartedEvent.builder()
+                        .invocationContext(invocationContext)
+                        .systemMessage(systemMessage)
+                        .userMessage(userMessage)
+                        .build());
 
         boolean needsMemorySeed = needsMemorySeed(context, memoryId); // we need to know figure this out before we add
                                                                       // the system and user message
@@ -236,18 +257,6 @@ public class AiServiceMethodImplementationSupport {
         List<ToolSpecification> effectiveToolSpecifications = toolSpecifications;
         Map<String, ToolExecutor> finalToolExecutors = toolExecutors;
 
-        InvocationParameters invocationParameters = findInvocationParams(methodArgs);
-
-        InvocationContext invocationContext = InvocationContext.builder()
-                .invocationId(UUID.randomUUID())
-                .interfaceName(context.aiServiceClass.getName())
-                .methodName(methodCreateInfo.getMethodName())
-                .methodArguments(methodArgs != null ? Arrays.asList(methodArgs) : List.of())
-                .chatMemoryId(memoryId)
-                .invocationParameters(invocationParameters)
-                .timestampNow()
-                .build();
-
         AugmentationResult augmentationResult = null;
         if (context.retrievalAugmentor != null) {
             List<ChatMessage> chatMemory = context.hasChatMemory()
@@ -260,73 +269,24 @@ public class AiServiceMethodImplementationSupport {
                     .build();
             AugmentationRequest augmentationRequest = new AugmentationRequest(userMessage, metadata);
 
-            if (!isMulti) {
-                augmentationResult = context.retrievalAugmentor.augment(augmentationRequest);
-                userMessage = (UserMessage) augmentationResult.chatMessage();
-            } else {
-                // TODO duplicated context propagation.
-                // this a special case where we can't block, so we need to delegate the
-                // retrieval augmentation to a worker pool
-                CompletableFuture<AugmentationResult> augmentationResultCF = CompletableFuture
-                        .supplyAsync(new Supplier<>() {
-                            @Override
-                            public AugmentationResult get() {
-                                return context.retrievalAugmentor.augment(augmentationRequest);
-                            }
-                        }, Infrastructure.getDefaultWorkerPool());
-
-                return Multi.createFrom().completionStage(augmentationResultCF).flatMap(
-                        new Function<>() {
-                            @Override
-                            public Flow.Publisher<?> apply(AugmentationResult ar) {
-                                ChatMessage augmentedUserMessage = ar.chatMessage();
-
-                                ChatMemory memory = context.chatMemoryService.getChatMemory(memoryId);
-                                UserMessage guardrailsMessage = GuardrailsSupport.executeInputGuardrails(
-                                        context.guardrailService(),
-                                        (UserMessage) augmentedUserMessage,
-                                        methodCreateInfo, memory, ar, templateVariables);
-                                List<ChatMessage> messagesToSend = messagesToSend(guardrailsMessage, needsMemorySeed);
-                                var stream = new TokenStreamMulti(messagesToSend, effectiveToolSpecifications,
-                                        finalToolExecutors, ar.contents(), context, memoryId,
-                                        methodCreateInfo.isSwitchToWorkerThreadForToolExecution(),
-                                        isRunningOnWorkerThread);
-
-                                return stream
-                                        .filter(event -> !isStringMulti
-                                                || event instanceof ChatEvent.PartialResponseEvent)
-                                        .map(event -> {
-                                            if (isStringMulti && event instanceof ChatEvent.PartialResponseEvent) {
-                                                return ((ChatEvent.PartialResponseEvent) event).getChunk();
-                                            }
-                                            return event;
-                                        })
-                                        .plug(m -> ResponseAugmenterSupport.apply(m, methodCreateInfo,
-                                                new ResponseAugmenterParams((UserMessage) augmentedUserMessage, memory,
-                                                        ar,
-                                                        methodCreateInfo.getUserMessageTemplate(), templateVariables)));
-                            }
-
-                            private List<ChatMessage> messagesToSend(UserMessage augmentedUserMessage,
-                                    boolean needsMemorySeed) {
-                                return context.hasChatMemory()
-                                        ? createMessagesToSendForExistingMemory(systemMessage, augmentedUserMessage,
-                                                context.chatMemoryService.getChatMemory(memoryId), needsMemorySeed,
-                                                context,
-                                                methodCreateInfo)
-                                        : createMessagesToSendForNoMemory(systemMessage, augmentedUserMessage,
-                                                needsMemorySeed, context, methodCreateInfo);
-                            }
-                        });
-            }
+            augmentationResult = context.retrievalAugmentor.augment(augmentationRequest);
+            userMessage = (UserMessage) augmentationResult.chatMessage();
         }
 
         var guardrailService = context.guardrailService();
         var chatMemory = context.hasChatMemory() ? context.chatMemoryService.getChatMemory(memoryId) : null;
 
+        var guardrailParams = GuardrailRequestParams.builder()
+                .chatMemory(chatMemory)
+                .augmentationResult(augmentationResult)
+                .userMessageTemplate(methodCreateInfo.getUserMessageTemplate())
+                .variables(templateVariables)
+                .invocationContext(invocationContext)
+                .aiServiceListenerRegistrar(context.eventListenerRegistrar)
+                .build();
+
         userMessage = GuardrailsSupport.executeInputGuardrails(guardrailService, userMessage, methodCreateInfo,
-                chatMemory,
-                augmentationResult, templateVariables, invocationContext);
+                guardrailParams);
 
         CommittableChatMemory committableChatMemory;
         List<ChatMessage> messagesToSend;
@@ -345,7 +305,6 @@ public class AiServiceMethodImplementationSupport {
         }
 
         if (TypeUtil.isTokenStream(returnType)) {
-            // TODO Indicate the output guardrails cannot be used when using token stream.
             // NOTE - only the quarkus-specific output guardrails aren't implemented using a
             // TokenStream
             // Upstream supports it
@@ -383,8 +342,9 @@ public class AiServiceMethodImplementationSupport {
                                             // are worse
             var hasUpstreamGuardrails = methodCreateInfo.getOutputGuardrails().hasGuardrails();
             Multi<?> stream = new TokenStreamMulti(messagesToSend, toolSpecifications, toolExecutors,
-                    (augmentationResult != null ? augmentationResult.contents() : null), context, memoryId,
-                    methodCreateInfo.isSwitchToWorkerThreadForToolExecution(), isRunningOnWorkerThread);
+                    (augmentationResult != null ? augmentationResult.contents() : null), context, invocationContext, memoryId,
+                    methodCreateInfo.isSwitchToWorkerThreadForToolExecution(), isRunningOnWorkerThread,
+                    methodCreateInfo, methodArgs);
 
             if (hasUpstreamGuardrails) {
                 stream = stream.filter(o -> o instanceof ChatEvent)
@@ -394,9 +354,14 @@ public class AiServiceMethodImplementationSupport {
                                 new OutputGuardrailStreamingMapper(
                                         guardrailService,
                                         methodCreateInfo,
-                                        committableChatMemory,
-                                        actualAugmentationResult,
-                                        templateVariables,
+                                        GuardrailRequestParams.builder()
+                                                .chatMemory(committableChatMemory)
+                                                .augmentationResult(augmentationResult)
+                                                .userMessageTemplate(methodCreateInfo.getUserMessageTemplate())
+                                                .variables(templateVariables)
+                                                .invocationContext(invocationContext)
+                                                .aiServiceListenerRegistrar(context.eventListenerRegistrar)
+                                                .build(),
                                         isStringMulti))
                         .onFailure(GuardrailsSupport::isOutputGuardrailRetry)
                         .retry()
@@ -432,11 +397,13 @@ public class AiServiceMethodImplementationSupport {
 
         log.debug("AI response obtained");
 
-        /**
-         * @deprecated In favor of https://docs.langchain4j.dev/tutorials/observability#ai-service-observability
-         */
-        beanManager.getEvent().select(ResponseFromLLMReceivedEvent.class)
-                .fire(new DefaultResponseFromLLMReceivedEvent(auditSourceInfo, response));
+        // New firing
+        context.eventListenerRegistrar.fireEvent(
+                AiServiceResponseReceivedEvent.builder()
+                        .invocationContext(invocationContext)
+                        .request(chatRequest)
+                        .response(response)
+                        .build());
 
         TokenUsage tokenUsageAccumulator = response.tokenUsage();
 
@@ -471,7 +438,17 @@ public class AiServiceMethodImplementationSupport {
 
                 ToolExecutionResult toolExecutionResult = toolExecutor == null
                         ? context.toolService.applyToolHallucinationStrategy(toolExecutionRequest)
-                        : executeTool(auditSourceInfo, toolExecutionRequest, toolExecutor, invocationContext, beanManager);
+                        : executeTool(toolExecutionRequest, toolExecutor, invocationContext,
+                                context.toolService.argumentsErrorHandler(), context.toolService.executionErrorHandler());
+
+                // New firing
+                context.eventListenerRegistrar.fireEvent(
+                        dev.langchain4j.observability.api.event.ToolExecutedEvent.builder()
+                                .invocationContext(invocationContext)
+                                .request(toolExecutionRequest)
+                                .resultText(toolExecutionResult.resultText())
+                                .build());
+
                 ToolExecutionResultMessage toolExecutionResultMessage = ToolExecutionResultMessage.from(toolExecutionRequest,
                         toolExecutionResult.resultText());
 
@@ -497,7 +474,7 @@ public class AiServiceMethodImplementationSupport {
                             .illegalConfiguration("@Tool with IMMEDIATE return behavior must return a Result");
                 }
                 ChatResponse finalResponse = intermediateResponses.remove(intermediateResponses.size() - 1);
-                return Result.builder()
+                var result = Result.builder()
                         .content(null)
                         .tokenUsage(tokenUsageAccumulator)
                         .sources(augmentationResult == null ? null : augmentationResult.contents())
@@ -506,6 +483,14 @@ public class AiServiceMethodImplementationSupport {
                         .intermediateResponses(intermediateResponses)
                         .finalResponse(finalResponse)
                         .build();
+
+                context.eventListenerRegistrar.fireEvent(
+                        AiServiceCompletedEvent.builder()
+                                .invocationContext(invocationContext)
+                                .result(result)
+                                .build());
+
+                return result;
             }
 
             log.debug("Attempting to obtain AI response");
@@ -525,7 +510,8 @@ public class AiServiceMethodImplementationSupport {
 
             if (nonNull(context.chatModel.defaultRequestParameters())) {
                 var toolChoice = context.chatModel.defaultRequestParameters().toolChoice();
-                if (nonNull(toolChoice) && toolChoice.equals(ToolChoice.REQUIRED)) {
+                if (nonNull(toolChoice) && toolChoice.equals(ToolChoice.REQUIRED)
+                        && !context.allowContinuousForcedToolCalling) {
                     // This code is needed to avoid a infinite-loop when using the AiService
                     // in combination with the tool-choice option set to REQUIRED.
                     // If the tool-choice option is not set to AUTO after calling the tool,
@@ -535,14 +521,17 @@ public class AiServiceMethodImplementationSupport {
                 }
             }
 
-            response = effectiveChatModel.chat(chatRequestBuilder.parameters(parametersBuilder.build()).build());
+            ChatRequest request = chatRequestBuilder.parameters(parametersBuilder.build()).build();
+            response = effectiveChatModel.chat(request);
             log.debug("AI response obtained");
 
-            /**
-             * @deprecated In favor of https://docs.langchain4j.dev/tutorials/observability#ai-service-observability
-             */
-            beanManager.getEvent().select(ResponseFromLLMReceivedEvent.class)
-                    .fire(new DefaultResponseFromLLMReceivedEvent(auditSourceInfo, response));
+            // New firing
+            context.eventListenerRegistrar.fireEvent(
+                    AiServiceResponseReceivedEvent.builder()
+                            .invocationContext(invocationContext)
+                            .request(request)
+                            .response(response)
+                            .build());
 
             tokenUsageAccumulator = sum(tokenUsageAccumulator, response.tokenUsage());
         }
@@ -550,7 +539,14 @@ public class AiServiceMethodImplementationSupport {
         String userMessageTemplate = methodCreateInfo.getUserMessageTemplate();
         var guardrailResult = GuardrailsSupport.executeOutputGuardrails(guardrailService, methodCreateInfo, response,
                 chatExecutor,
-                committableChatMemory, augmentationResult, templateVariables);
+                GuardrailRequestParams.builder()
+                        .chatMemory(committableChatMemory)
+                        .augmentationResult(augmentationResult)
+                        .userMessageTemplate(methodCreateInfo.getUserMessageTemplate())
+                        .variables(templateVariables)
+                        .invocationContext(invocationContext)
+                        .aiServiceListenerRegistrar(context.eventListenerRegistrar)
+                        .build());
 
         // everything worked as expected so let's commit the messages
         committableChatMemory.commit();
@@ -559,6 +555,12 @@ public class AiServiceMethodImplementationSupport {
                 userMessageTemplate, templateVariables);
 
         if ((guardrailResult != null) && TypeUtil.isTypeOf(returnType, guardrailResult.getClass())) {
+            context.eventListenerRegistrar.fireEvent(
+                    AiServiceCompletedEvent.builder()
+                            .invocationContext(invocationContext)
+                            .result(guardrailResult)
+                            .build());
+
             return ResponseAugmenterSupport.invoke(guardrailResult, methodCreateInfo, responseAugmenterParam);
         }
 
@@ -573,17 +575,33 @@ public class AiServiceMethodImplementationSupport {
                     ChatResponse.builder().aiMessage(response.aiMessage()).build(),
                     TypeUtil.resultTypeParam((ParameterizedType) returnType));
             parsedResponse = ResponseAugmenterSupport.invoke(parsedResponse, methodCreateInfo, responseAugmenterParam);
-            return Result.builder()
+            var result = Result.builder()
                     .content(parsedResponse)
                     .tokenUsage(tokenUsageAccumulator)
                     .sources(augmentationResult == null ? null : augmentationResult.contents())
                     .finishReason(response.finishReason())
                     .build();
+
+            context.eventListenerRegistrar.fireEvent(
+                    AiServiceCompletedEvent.builder()
+                            .invocationContext(invocationContext)
+                            .result(result)
+                            .build());
+
+            return result;
         }
 
-        return ResponseAugmenterSupport.invoke(
+        var augmentedResponse = ResponseAugmenterSupport.invoke(
                 SERVICE_OUTPUT_PARSER.parse(ChatResponse.builder().aiMessage(response.aiMessage()).build(), returnType),
                 methodCreateInfo, responseAugmenterParam);
+
+        context.eventListenerRegistrar.fireEvent(
+                AiServiceCompletedEvent.builder()
+                        .invocationContext(invocationContext)
+                        .result(augmentedResponse)
+                        .build());
+
+        return augmentedResponse;
     }
 
     private static InvocationParameters findInvocationParams(Object[] args) {
@@ -598,17 +616,52 @@ public class AiServiceMethodImplementationSupport {
         return new InvocationParameters();
     }
 
-    private static ToolExecutionResult executeTool(AuditSourceInfo auditSourceInfo,
-            ToolExecutionRequest toolExecutionRequest, ToolExecutor toolExecutor, InvocationContext invocationContext,
-            BeanManager beanManager) {
-        ToolExecutionResult toolExecutionResult = toolExecutor.executeWithContext(toolExecutionRequest, invocationContext);
+    private static ToolExecutionResult executeTool(ToolExecutionRequest toolExecutionRequest, ToolExecutor toolExecutor,
+            InvocationContext invocationContext,
+            ToolArgumentsErrorHandler toolArgumentsErrorHandler,
+            ToolExecutionErrorHandler toolExecutionErrorHandler) {
+        ToolExecutionResult toolExecutionResult;
+        try {
+            toolExecutionResult = toolExecutor.executeWithContext(toolExecutionRequest, invocationContext);
+        } catch (ToolArgumentsException e) {
+            if (toolArgumentsErrorHandler != null) {
+                log.debugv(e, "Error occurred while executing tool arguments. Executing  ",
+                        toolArgumentsErrorHandler.getClass().getName() + "' to handle it");
+                ToolErrorContext errorContext = ToolErrorContext.builder()
+                        .toolExecutionRequest(toolExecutionRequest)
+                        .invocationContext(invocationContext)
+                        .build();
+                ToolErrorHandlerResult toolErrorHandlerResult = toolArgumentsErrorHandler.handle(e, errorContext);
+                return ToolExecutionResult.builder()
+                        .isError(true)
+                        .resultText(toolErrorHandlerResult.text())
+                        .build();
+            } else {
+                throw e;
+            }
+        } catch (Exception e) {
+            if (e instanceof PreventsErrorHandlerExecution) {
+                // preserve semantics for existing code
+                throw e;
+            }
+            if (toolExecutionErrorHandler != null) {
+                log.debugv(e, "Error occurred while executing tool. Executing '",
+                        toolExecutionErrorHandler.getClass().getName() + "' to handle it");
+                ToolErrorContext errorContext = ToolErrorContext.builder()
+                        .toolExecutionRequest(toolExecutionRequest)
+                        .invocationContext(invocationContext)
+                        .build();
+                ToolErrorHandlerResult toolErrorHandlerResult = toolExecutionErrorHandler.handle(e, errorContext);
+                return ToolExecutionResult.builder()
+                        .isError(true)
+                        .resultText(toolErrorHandlerResult.text())
+                        .build();
+            } else {
+                throw e;
+            }
+        }
         log.debugv("Result of {0} is '{1}'", toolExecutionRequest, toolExecutionResult);
 
-        /**
-         * @deprecated In favor of https://docs.langchain4j.dev/tutorials/observability#ai-service-observability
-         */
-        beanManager.getEvent().select(ToolExecutedEvent.class)
-                .fire(new DefaultToolExecutedEvent(auditSourceInfo, toolExecutionRequest, toolExecutionResult.resultText()));
         return toolExecutionResult;
     }
 
@@ -653,17 +706,17 @@ public class AiServiceMethodImplementationSupport {
     }
 
     private static Object doImplementGenerateImage(AiServiceMethodCreateInfo methodCreateInfo,
-            QuarkusAiServiceContext context,
+            QuarkusAiServiceContext context, InvocationContext invocationContext,
             Optional<SystemMessage> systemMessage, UserMessage userMessage,
-            Object memoryId, Type returnType, Map<String, Object> templateVariables, AuditSourceInfo auditSourceInfo) {
+            Object memoryId, Type returnType, Map<String, Object> templateVariables) {
 
-        var beanManager = Arc.container().beanManager();
-
-        /**
-         * @deprecated In favor of https://docs.langchain4j.dev/tutorials/observability#ai-service-observability
-         */
-        beanManager.getEvent().select(InitialMessagesCreatedEvent.class)
-                .fire(new DefaultInitialMessagesCreatedEvent(auditSourceInfo, systemMessage, userMessage));
+        // New firing
+        context.eventListenerRegistrar.fireEvent(
+                AiServiceStartedEvent.builder()
+                        .invocationContext(invocationContext)
+                        .systemMessage(systemMessage)
+                        .userMessage(userMessage)
+                        .build());
 
         // TODO: does it make sense to use the retrievalAugmentor here? What good would
         // be for us telling the LLM to use this or that information to create an
@@ -672,9 +725,16 @@ public class AiServiceMethodImplementationSupport {
 
         // TODO: we can only support input guardrails for now as it is tied to AiMessage
         var chatMemory = context.hasChatMemory() ? context.chatMemoryService.getChatMemory(memoryId) : null;
+        var guardrailParams = GuardrailRequestParams.builder()
+                .chatMemory(chatMemory)
+                .augmentationResult(augmentationResult)
+                .userMessageTemplate(methodCreateInfo.getUserMessageTemplate())
+                .variables(templateVariables)
+                .invocationContext(invocationContext)
+                .aiServiceListenerRegistrar(context.eventListenerRegistrar)
+                .build();
         var um = GuardrailsSupport.executeInputGuardrails(context.guardrailService(), userMessage, methodCreateInfo,
-                chatMemory,
-                augmentationResult, templateVariables);
+                guardrailParams);
 
         var imagePrompt = systemMessage
                 .map(sm -> "%s\n%s".formatted(sm.text(), um.singleText()))
@@ -682,11 +742,12 @@ public class AiServiceMethodImplementationSupport {
 
         Response<Image> imageResponse = context.imageModel.generate(imagePrompt);
 
-        /**
-         * @deprecated In favor of https://docs.langchain4j.dev/tutorials/observability#ai-service-observability
-         */
-        beanManager.getEvent().select(LLMInteractionCompleteEvent.class)
-                .fire(new DefaultLLMInteractionCompleteEvent(auditSourceInfo, imageResponse.content()));
+        // New firing
+        context.eventListenerRegistrar.fireEvent(
+                AiServiceCompletedEvent.builder()
+                        .invocationContext(invocationContext)
+                        .result(imageResponse.content())
+                        .build());
 
         if (TypeUtil.isImage(returnType)) {
             return imageResponse.content();
@@ -837,73 +898,10 @@ public class AiServiceMethodImplementationSupport {
         AiServiceMethodCreateInfo.UserMessageInfo userMessageInfo = createInfo.getUserMessageInfo();
 
         String userName = null;
-        ImageContent imageContent = null;
-        AudioContent audioContent = null;
-        PdfFileContent pdfFileContent = null;
         if (userMessageInfo.userNameParamPosition().isPresent()) {
             userName = methodArgs[userMessageInfo.userNameParamPosition().get()]
                     .toString(); // LangChain4j does this, but might want to make anything other than a String a
                                                                                                      // build time error
-        }
-        if (userMessageInfo.imageParamPosition().isPresent()) {
-            Object imageParamValue = methodArgs[userMessageInfo.imageParamPosition().get()];
-            if (imageParamValue instanceof String s) {
-                imageContent = ImageContent.from(s);
-            } else if (imageParamValue instanceof URI u) {
-                imageContent = ImageContent.from(u);
-            } else if (imageParamValue instanceof URL u) {
-                try {
-                    imageContent = ImageContent.from(u.toURI());
-                } catch (URISyntaxException e) {
-                    throw new RuntimeException(e);
-                }
-            } else if (imageParamValue instanceof Image i) {
-                imageContent = ImageContent.from(i);
-            } else {
-                throw new IllegalStateException("Unsupported parameter type '" + imageParamValue.getClass()
-                        + "' annotated with @ImageUrl. Offending AiService is '" + createInfo.getInterfaceName() + "#"
-                        + createInfo.getMethodName());
-            }
-        }
-        if (userMessageInfo.audioParamPosition().isPresent()) {
-            Object audioParamValue = methodArgs[userMessageInfo.audioParamPosition().get()];
-            if (audioParamValue instanceof String s) {
-                audioContent = AudioContent.from(s);
-            } else if (audioParamValue instanceof URI u) {
-                audioContent = AudioContent.from(u);
-            } else if (audioParamValue instanceof URL u) {
-                try {
-                    audioContent = AudioContent.from(u.toURI());
-                } catch (URISyntaxException e) {
-                    throw new RuntimeException(e);
-                }
-            } else if (audioParamValue instanceof Audio a) {
-                audioContent = AudioContent.from(a);
-            } else {
-                throw new IllegalStateException("Unsupported parameter type '" + audioParamValue.getClass()
-                        + "' annotated with @AudioUrl. Offending AiService is '" + createInfo.getInterfaceName() + "#"
-                        + createInfo.getMethodName());
-            }
-        }
-        if (userMessageInfo.pdfParamPosition().isPresent()) {
-            Object pdfParamValue = methodArgs[userMessageInfo.pdfParamPosition().get()];
-            if (pdfParamValue instanceof String s) {
-                pdfFileContent = PdfFileContent.from(s);
-            } else if (pdfParamValue instanceof URI u) {
-                pdfFileContent = PdfFileContent.from(u);
-            } else if (pdfParamValue instanceof URL u) {
-                try {
-                    pdfFileContent = PdfFileContent.from(u.toURI());
-                } catch (URISyntaxException e) {
-                    throw new RuntimeException(e);
-                }
-            } else if (pdfParamValue instanceof PdfFile i) {
-                pdfFileContent = PdfFileContent.from(i);
-            } else {
-                throw new IllegalStateException("Unsupported parameter type '" + pdfParamValue.getClass()
-                        + "' annotated with @PdfUrl. Offending AiService is '" + createInfo.getInterfaceName() + "#"
-                        + createInfo.getMethodName());
-            }
         }
 
         if (userMessageInfo.template().isPresent()) {
@@ -938,7 +936,10 @@ public class AiServiceMethodImplementationSupport {
             }
 
             Prompt prompt = PromptTemplate.from(templateText).apply(templateVariables);
-            return createUserMessage(userName, imageContent, audioContent, pdfFileContent, prompt.text());
+            List<Content> finalContents = new ArrayList<>();
+            finalContents.add(TextContent.from(prompt.text()));
+            handleSpecialContentTypes(createInfo, methodArgs, finalContents);
+            return toUserMessage(userName, finalContents);
 
         } else if (userMessageInfo.paramPosition().isPresent()) {
             Integer paramIndex = userMessageInfo.paramPosition().get();
@@ -951,13 +952,141 @@ public class AiServiceMethodImplementationSupport {
             }
 
             String text = toString(argValue);
-            return createUserMessage(userName, imageContent,
-                    audioContent,
-                    pdfFileContent, text.concat(supportsJsonSchema || !createInfo.getResponseSchemaInfo().enabled() ? ""
-                            : createInfo.getResponseSchemaInfo().outputFormatInstructions()));
+
+            List<Content> finalContents = new ArrayList<>();
+            finalContents
+                    .add(TextContent.from(text.concat(supportsJsonSchema || !createInfo.getResponseSchemaInfo().enabled() ? ""
+                            : createInfo.getResponseSchemaInfo().outputFormatInstructions())));
+            handleSpecialContentTypes(createInfo, methodArgs, finalContents);
+            return toUserMessage(userName, finalContents);
         } else {
             // create a user message that instructs the model to ignore it's content
             return EmptyUserMessage.INSTANCE;
+        }
+    }
+
+    private static UserMessage toUserMessage(String userName, List<Content> finalContents) {
+        if (userName == null) {
+            return UserMessage.userMessage(finalContents);
+        } else {
+            return UserMessage.userMessage(userName, finalContents);
+        }
+    }
+
+    private static void handleSpecialContentTypes(AiServiceMethodCreateInfo createInfo, Object[] methodArgs,
+            List<Content> finalContents) {
+        for (int i = 0; i < methodArgs.length; i++) {
+            Object methodArg = methodArgs[i];
+            AiServiceMethodCreateInfo.ParameterInfo parameterInfo = createInfo.getParameterInfo().get(i);
+            if (methodArg instanceof Content content) {
+                handleContent(content, parameterInfo, finalContents);
+            } else if (methodArg instanceof List<?> list) {
+                Type javaType = TypeSignatureParser.parse(parameterInfo.typeDescriptor());
+                if (javaType instanceof ParameterizedType pt) {
+                    Type actualTypeArgument = pt.getActualTypeArguments()[0];
+                    if (Content.class.isAssignableFrom(loadClass(actualTypeArgument))) {
+                        for (Object o : list) {
+                            handleContent((Content) o, parameterInfo, finalContents);
+                        }
+                    }
+                }
+            } else if (methodArg instanceof Video video) {
+                finalContents.add(VideoContent.from(video));
+            } else if (methodArg instanceof Audio audio) {
+                finalContents.add(AudioContent.from(audio));
+            } else if (methodArg instanceof PdfFile pdf) {
+                finalContents.add(PdfFileContent.from(pdf));
+            } else if (methodArg instanceof Image image) {
+                finalContents.add(ImageContent.from(image));
+            } else if (parameterInfo.annotationTypes().contains(VideoUrl.class.getName())) {
+                VideoContent videoContent;
+                if (methodArg instanceof String s) {
+                    videoContent = VideoContent.from(s);
+                } else if (methodArg instanceof URI u) {
+                    videoContent = VideoContent.from(u);
+                } else if (methodArg instanceof URL u) {
+                    try {
+                        videoContent = VideoContent.from(u.toURI());
+                    } catch (URISyntaxException e) {
+                        throw new RuntimeException(e);
+                    }
+                } else {
+                    throw new IllegalStateException("Unsupported parameter type '" + methodArg.getClass()
+                            + "' annotated with @VideoUrl. Offending AiService is '" + createInfo.getInterfaceName() + "#"
+                            + createInfo.getMethodName());
+                }
+                finalContents.add(videoContent);
+            } else if (parameterInfo.annotationTypes().contains(AudioUrl.class.getName())) {
+                AudioContent audioContent;
+                if (methodArg instanceof String s) {
+                    audioContent = AudioContent.from(s);
+                } else if (methodArg instanceof URI u) {
+                    audioContent = AudioContent.from(u);
+                } else if (methodArg instanceof URL u) {
+                    try {
+                        audioContent = AudioContent.from(u.toURI());
+                    } catch (URISyntaxException e) {
+                        throw new RuntimeException(e);
+                    }
+                } else {
+                    throw new IllegalStateException("Unsupported parameter type '" + methodArg.getClass()
+                            + "' annotated with @AudioUrl. Offending AiService is '" + createInfo.getInterfaceName() + "#"
+                            + createInfo.getMethodName());
+                }
+                finalContents.add(audioContent);
+            } else if (parameterInfo.annotationTypes().contains(PdfUrl.class.getName())) {
+                PdfFileContent pdfFileContent;
+                if (methodArg instanceof String s) {
+                    pdfFileContent = PdfFileContent.from(s);
+                } else if (methodArg instanceof URI u) {
+                    pdfFileContent = PdfFileContent.from(u);
+                } else if (methodArg instanceof URL u) {
+                    try {
+                        pdfFileContent = PdfFileContent.from(u.toURI());
+                    } catch (URISyntaxException e) {
+                        throw new RuntimeException(e);
+                    }
+                } else {
+                    throw new IllegalStateException("Unsupported parameter type '" + methodArg.getClass()
+                            + "' annotated with @PdfUrl. Offending AiService is '" + createInfo.getInterfaceName() + "#"
+                            + createInfo.getMethodName());
+                }
+                finalContents.add(pdfFileContent);
+            } else if (parameterInfo.annotationTypes().contains(ImageUrl.class.getName())) {
+                ImageContent imageContent;
+                if (methodArg instanceof String s) {
+                    imageContent = ImageContent.from(s);
+                } else if (methodArg instanceof URI u) {
+                    imageContent = ImageContent.from(u);
+                } else if (methodArg instanceof URL u) {
+                    try {
+                        imageContent = ImageContent.from(u.toURI());
+                    } catch (URISyntaxException e) {
+                        throw new RuntimeException(e);
+                    }
+                } else {
+                    throw new IllegalStateException("Unsupported parameter type '" + methodArg.getClass()
+                            + "' annotated with @ImageUrl. Offending AiService is '" + createInfo.getInterfaceName() + "#"
+                            + createInfo.getMethodName());
+                }
+                finalContents.add(imageContent);
+            }
+        }
+    }
+
+    private static Class<?> loadClass(Type actualTypeArgument) {
+        try {
+            return Class.forName(actualTypeArgument.getTypeName(), false, Thread.currentThread()
+                    .getContextClassLoader());
+        } catch (ClassNotFoundException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static void handleContent(Content content, AiServiceMethodCreateInfo.ParameterInfo parameterInfo,
+            List<Content> finalContents) {
+        if (parameterInfo.annotationTypes().contains(dev.langchain4j.service.UserMessage.class.getName())) {
+            finalContents.add(content);
         }
     }
 
@@ -978,27 +1107,6 @@ public class AiServiceMethodImplementationSupport {
         }
 
         return variables;
-    }
-
-    private static UserMessage createUserMessage(String name, ImageContent imageContent, AudioContent audioContent,
-            PdfFileContent pdfFileContent,
-            String text) {
-        List<dev.langchain4j.data.message.Content> contents = new ArrayList<>();
-        contents.add(TextContent.from(text));
-        if (imageContent != null) {
-            contents.add(imageContent);
-        }
-        if (audioContent != null) {
-            contents.add(audioContent);
-        }
-        if (pdfFileContent != null) {
-            contents.add(pdfFileContent);
-        }
-        if (name == null) {
-            return UserMessage.userMessage(contents);
-        } else {
-            return UserMessage.userMessage(name, contents);
-        }
     }
 
     private static Object transformTemplateParamValue(Object value) {
@@ -1063,6 +1171,11 @@ public class AiServiceMethodImplementationSupport {
                 .getOptionalValue("quarkus.langchain4j.ai-service.max-tool-executions", Integer.class)
                 .orElse(
                         DEFAULT_MAX_SEQUENTIAL_TOOL_EXECUTIONS);
+    }
+
+    private static Executor createExecutor() {
+        InstanceHandle<ManagedExecutor> executor = Arc.container().instance(ManagedExecutor.class);
+        return executor.isAvailable() ? executor.get() : Infrastructure.getDefaultExecutor();
     }
 
     public static class Input {

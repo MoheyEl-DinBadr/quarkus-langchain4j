@@ -34,6 +34,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Reclaim Disk Space
+        run: .github/ci-prerequisites.sh
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -67,7 +70,7 @@ jobs:
                 | jq -R -s -c 'split("\n")[:-1]')
 
           # Integration tests (without the in-process embedding models)
-          # Remove JLama and Llama3 from the list
+          # Remove JLama, Llama3 and GPU Llama3 from the list
           cd integration-tests
           IT_MODULES=$( \
               find . -mindepth 2 -maxdepth 2 -type f -name 'pom.xml' -exec dirname {} \; \
@@ -75,6 +78,7 @@ jobs:
                 | sort -u \
                 | grep -v jlama \
                 | grep -v llama3-java \
+                | grep -v gpu-llama3 \
                 | grep -v in-process-embedding-models \
                 | jq -R -s -c 'split("\n")[:-1]')
 
@@ -111,7 +115,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        java: [ 17, 21, 24 ]
+        java: [ 17, 21, 25 ]
         module: ${{fromJson(needs.quick-build.outputs.all_modules)}}
     name: JVM tests - ${{ matrix.module }} - Java ${{ matrix.java }}
     runs-on: ubuntu-latest
@@ -143,6 +147,13 @@ jobs:
         if: ${{ matrix.java >= 21 }}
         run: |
           ./mvnw -B clean install -DskipTests -Dno-format -ntp -f model-providers/jlama/pom.xml
+
+      # Build Jlama if JDK >= 21
+      # It's not build by default as it requires Java 21+
+      - name: Build GPU Llama3 extension
+        if: ${{ matrix.java >= 21 }}
+        run: |
+          ./mvnw -B clean install -DskipTests -Dno-format -ntp -f model-providers/gpu-llama3/pom.xml
 
       # Build Llama3.java if JDK >= 22. See https://x.com/tjake/status/1849141171475399083?t=EpgVJCPLC17fCXio0FvnhA&s=19 for the reason
       - name: Build Llama3-java extension

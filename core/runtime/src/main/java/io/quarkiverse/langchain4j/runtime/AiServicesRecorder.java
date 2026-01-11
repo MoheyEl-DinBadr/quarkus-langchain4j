@@ -4,6 +4,7 @@ import static io.quarkiverse.langchain4j.QuarkusAiServicesFactory.InstanceHolder
 
 import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -20,9 +21,12 @@ import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.image.ImageModel;
 import dev.langchain4j.model.moderation.ModerationModel;
 import dev.langchain4j.rag.RetrievalAugmentor;
+import dev.langchain4j.service.tool.ToolArgumentsErrorHandler;
+import dev.langchain4j.service.tool.ToolExecutionErrorHandler;
 import dev.langchain4j.service.tool.ToolProvider;
 import io.quarkiverse.langchain4j.ModelName;
 import io.quarkiverse.langchain4j.RegisterAiService;
+import io.quarkiverse.langchain4j.observability.AiServiceEvents;
 import io.quarkiverse.langchain4j.runtime.aiservice.AiServiceClassCreateInfo;
 import io.quarkiverse.langchain4j.runtime.aiservice.AiServiceMethodCreateInfo;
 import io.quarkiverse.langchain4j.runtime.aiservice.ChatMemorySeeder;
@@ -115,13 +119,17 @@ public class AiServicesRecorder {
             @Override
             public QuarkusAiServiceContext apply(SyntheticCreationalContext<QuarkusAiServiceContext> creationalContext) {
                 try {
-                    Class<?> serviceClass = Thread.currentThread().getContextClassLoader()
-                            .loadClass(info.serviceClassName());
+                    Class<?> serviceClass = loadClass(info.serviceClassName());
 
                     QuarkusAiServiceContext aiServiceContext = new QuarkusAiServiceContext(serviceClass);
                     // we don't really care about QuarkusAiServices here, all we care about is that it
                     // properly populates QuarkusAiServiceContext which is what we are trying to construct
                     var quarkusAiServices = INSTANCE.create(aiServiceContext);
+
+                    // Populate the AI service listeners
+                    Arrays.stream(AiServiceEvents.values())
+                            .map(event -> event.createListener(serviceClass))
+                            .forEach(quarkusAiServices::registerListener);
 
                     if (info.languageModelSupplierClassName() != null
                             || info.streamingChatLanguageModelSupplierClassName() != null) {
@@ -167,11 +175,11 @@ public class AiServicesRecorder {
                             Object tool;
                             if (qualifier != null) {
                                 tool = creationalContext.getInjectedReference(
-                                        Thread.currentThread().getContextClassLoader().loadClass(entry.getKey()),
+                                        loadClass(entry.getKey()),
                                         qualifier);
                             } else {
                                 tool = creationalContext.getInjectedReference(
-                                        Thread.currentThread().getContextClassLoader().loadClass(entry.getKey()));
+                                        loadClass(entry.getKey()));
                             }
                             if (tool == null) {
                                 throw new IllegalStateException("Unknown tool: " + entry.getKey());
@@ -183,8 +191,7 @@ public class AiServicesRecorder {
 
                     if (info.toolHallucinationStrategyClassName() != null) {
                         Object toolHallucinationStrategy = creationalContext.getInjectedReference(
-                                Thread.currentThread().getContextClassLoader()
-                                        .loadClass(info.toolHallucinationStrategyClassName()));
+                                loadClass(info.toolHallucinationStrategyClassName()));
                         if (toolHallucinationStrategy == null) {
                             throw new IllegalStateException(
                                     "Unknown tool hallucination strategy: " + info.toolHallucinationStrategyClassName());
@@ -192,13 +199,26 @@ public class AiServicesRecorder {
                         quarkusAiServices.toolHallucinationStrategy(toolHallucinationStrategy);
                     }
 
+                    if (info.toolArgumentsErrorHandlerClassName() != null) {
+                        ToolArgumentsErrorHandler toolArgumentsErrorHandler = (ToolArgumentsErrorHandler) creationalContext
+                                .getInjectedReference(
+                                        loadClass(info.toolArgumentsErrorHandlerClassName()));
+                        quarkusAiServices.toolArgumentsErrorHandler(toolArgumentsErrorHandler);
+                    }
+
+                    if (info.toolExecutionErrorHandlerClassName() != null) {
+                        ToolExecutionErrorHandler toolArgumentsErrorHandler = (ToolExecutionErrorHandler) creationalContext
+                                .getInjectedReference(
+                                        loadClass(info.toolExecutionErrorHandlerClassName()));
+                        quarkusAiServices.toolExecutionErrorHandler(toolArgumentsErrorHandler);
+                    }
+
                     // if no explicit tools are provided, check if we should use a tool provider
                     if (info.toolProviderSupplier() != null) {
                         if (!RegisterAiService.BeanIfExistsToolProviderSupplier.class.getName()
                                 .equals(info.toolProviderSupplier())) {
                             // specific provider
-                            Class<?> toolProviderClass = Thread.currentThread().getContextClassLoader()
-                                    .loadClass(info.toolProviderSupplier());
+                            Class<?> toolProviderClass = loadClass(info.toolProviderSupplier());
                             Supplier<? extends ToolProvider> toolProvider = (Supplier<? extends ToolProvider>) creationalContext
                                     .getInjectedReference(toolProviderClass);
                             quarkusAiServices.toolProvider(toolProvider.get());
@@ -220,9 +240,8 @@ public class AiServicesRecorder {
                             quarkusAiServices.chatMemoryProvider(creationalContext.getInjectedReference(
                                     ChatMemoryProvider.class));
                         } else {
-                            Supplier<? extends ChatMemoryProvider> supplier = (Supplier<? extends ChatMemoryProvider>) Thread
-                                    .currentThread().getContextClassLoader()
-                                    .loadClass(info.chatMemoryProviderSupplierClassName())
+                            Supplier<? extends ChatMemoryProvider> supplier = (Supplier<? extends ChatMemoryProvider>) loadClass(
+                                    info.chatMemoryProviderSupplierClassName())
                                     .getConstructor().newInstance();
                             quarkusAiServices.chatMemoryProvider(supplier.get());
                         }
@@ -239,14 +258,12 @@ public class AiServicesRecorder {
                         } else {
                             try {
                                 Supplier<RetrievalAugmentor> instance = (Supplier<RetrievalAugmentor>) creationalContext
-                                        .getInjectedReference(Thread.currentThread().getContextClassLoader()
-                                                .loadClass(info.retrievalAugmentorSupplierClassName()));
+                                        .getInjectedReference(loadClass(info.retrievalAugmentorSupplierClassName()));
                                 quarkusAiServices.retrievalAugmentor(instance.get());
                             } catch (IllegalArgumentException e) {
                                 // the provided Supplier is not a CDI bean, build it manually
-                                Supplier<? extends RetrievalAugmentor> supplier = (Supplier<? extends RetrievalAugmentor>) Thread
-                                        .currentThread().getContextClassLoader()
-                                        .loadClass(info.retrievalAugmentorSupplierClassName())
+                                Supplier<? extends RetrievalAugmentor> supplier = (Supplier<? extends RetrievalAugmentor>) loadClass(
+                                        info.retrievalAugmentorSupplierClassName())
                                         .getConstructor().newInstance();
                                 quarkusAiServices.retrievalAugmentor(supplier.get());
                             }
@@ -266,9 +283,8 @@ public class AiServicesRecorder {
                                         ModelName.Literal.of(info.moderationModelName())));
                             }
                         } else {
-                            Supplier<? extends ModerationModel> supplier = (Supplier<? extends ModerationModel>) Thread
-                                    .currentThread().getContextClassLoader()
-                                    .loadClass(info.moderationModelSupplierClassName())
+                            Supplier<? extends ModerationModel> supplier = (Supplier<? extends ModerationModel>) loadClass(
+                                    info.moderationModelSupplierClassName())
                                     .getConstructor().newInstance();
                             quarkusAiServices.moderationModel(supplier.get());
                         }
@@ -287,23 +303,27 @@ public class AiServicesRecorder {
                             }
 
                         } else {
-                            Supplier<? extends ImageModel> supplier = (Supplier<? extends ImageModel>) Thread
-                                    .currentThread().getContextClassLoader()
-                                    .loadClass(info.imageModelSupplierClassName())
+                            Supplier<? extends ImageModel> supplier = (Supplier<? extends ImageModel>) loadClass(
+                                    info.imageModelSupplierClassName())
                                     .getConstructor().newInstance();
                             quarkusAiServices.imageModel(supplier.get());
                         }
                     }
 
                     if (info.chatMemorySeederClassName() != null) {
-                        quarkusAiServices.chatMemorySeeder((ChatMemorySeeder) Thread
-                                .currentThread().getContextClassLoader()
-                                .loadClass(info.chatMemorySeederClassName())
+                        quarkusAiServices.chatMemorySeeder((ChatMemorySeeder) loadClass(
+                                info.chatMemorySeederClassName())
                                 .getConstructor().newInstance());
                     }
                     if (info.maxSequentialToolInvocations() != null && info.maxSequentialToolInvocations() > 0) {
                         quarkusAiServices.maxSequentialToolInvocations(info.maxSequentialToolInvocations());
                     }
+
+                    if (info.maxSequentialToolInvocations() != null && info.maxSequentialToolInvocations() > 0) {
+                        quarkusAiServices.maxSequentialToolInvocations(info.maxSequentialToolInvocations());
+                    }
+
+                    quarkusAiServices.allowContinuousForcedToolCalling(info.allowContinuousForcedToolCalling());
 
                     return aiServiceContext;
                 } catch (ClassNotFoundException e) {
@@ -312,6 +332,11 @@ public class AiServicesRecorder {
                         | InstantiationException e) {
                     throw new RuntimeException(e);
                 }
+            }
+
+            private static Class<?> loadClass(String info) throws ClassNotFoundException {
+                return Thread.currentThread().getContextClassLoader()
+                        .loadClass(info);
             }
         };
     }

@@ -19,12 +19,17 @@ import jakarta.enterprise.inject.Instance;
 import jakarta.enterprise.inject.spi.CDI;
 import jakarta.ws.rs.client.ClientRequestContext;
 import jakarta.ws.rs.client.ClientRequestFilter;
+import jakarta.ws.rs.core.MultivaluedHashMap;
+import jakarta.ws.rs.core.MultivaluedMap;
 
+import org.eclipse.microprofile.rest.client.ext.ClientHeadersFactory;
 import org.jboss.resteasy.reactive.client.api.LoggingScope;
 
+import dev.langchain4j.model.chat.response.StreamingHandle;
 import dev.langchain4j.model.openai.internal.AsyncResponseHandling;
 import dev.langchain4j.model.openai.internal.ErrorHandling;
 import dev.langchain4j.model.openai.internal.OpenAiClient;
+import dev.langchain4j.model.openai.internal.ParsedAndRawResponse;
 import dev.langchain4j.model.openai.internal.ResponseHandle;
 import dev.langchain4j.model.openai.internal.StreamingCompletionHandling;
 import dev.langchain4j.model.openai.internal.StreamingResponseHandling;
@@ -113,6 +118,15 @@ public class QuarkusOpenAiClient extends OpenAiClient {
                             @Override
                             public void filter(ClientRequestContext requestContext) {
                                 requestContext.getHeaders().putSingle("User-Agent", builder.userAgent);
+                            }
+                        });
+                    }
+                    if (builder.customHeaders != null) {
+                        restApiBuilder.clientHeadersFactory(new ClientHeadersFactory() {
+                            @Override
+                            public MultivaluedMap<String, String> update(MultivaluedMap<String, String> incomingHeaders,
+                                    MultivaluedMap<String, String> clientOutgoingHeaders) {
+                                return new MultivaluedHashMap(builder.customHeaders);
                             }
                         });
                     }
@@ -242,6 +256,20 @@ public class QuarkusOpenAiClient extends OpenAiClient {
                                                 .build());
                             }
                         }, partialResponseHandler);
+            }
+
+            @Override
+            public StreamingResponseHandling onRawPartialResponse(
+                    Consumer<ParsedAndRawResponse<ChatCompletionResponse>> handler) {
+                return onPartialResponse(new Consumer<>() {
+                    @Override
+                    public void accept(ChatCompletionResponse chatCompletionResponse) {
+                        handler.accept(ParsedAndRawResponse.builder()
+                                .parsedResponse(chatCompletionResponse)
+                                .streamingHandle(new NoopStreamingHandle())
+                                .build());
+                    }
+                });
             }
         };
     }
@@ -630,4 +658,15 @@ public class QuarkusOpenAiClient extends OpenAiClient {
         }
     }
 
+    private static class NoopStreamingHandle implements StreamingHandle {
+        @Override
+        public void cancel() {
+
+        }
+
+        @Override
+        public boolean isCancelled() {
+            return false;
+        }
+    }
 }
