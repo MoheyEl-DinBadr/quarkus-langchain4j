@@ -23,6 +23,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Executor;
@@ -55,6 +56,7 @@ import dev.langchain4j.data.video.Video;
 import dev.langchain4j.exception.ToolArgumentsException;
 import dev.langchain4j.guardrail.ChatExecutor;
 import dev.langchain4j.guardrail.GuardrailRequestParams;
+import dev.langchain4j.internal.Utils;
 import dev.langchain4j.invocation.InvocationContext;
 import dev.langchain4j.invocation.InvocationParameters;
 import dev.langchain4j.memory.ChatMemory;
@@ -207,7 +209,15 @@ public class AiServiceMethodImplementationSupport {
         boolean isRunningOnWorkerThread = !Context.isOnEventLoopThread();
         Object[] methodArgs = invocationContext.methodArguments().toArray(Object[]::new);
         Object memoryId = invocationContext.chatMemoryId();
-        Optional<SystemMessage> systemMessage = prepareSystemMessage(methodCreateInfo, methodArgs, context, memoryId);
+
+        var chatMemory = context.hasChatMemory() ? context.chatMemoryService.getOrCreateChatMemory(memoryId) : null;
+        // we want to defer saving the new messages because the service could fail and be retried
+        // this also avoids fetching data from the remote stores every time we ask for the messages
+        var committableChatMemory = chatMemory != null ? new DefaultCommittableChatMemory(chatMemory)
+                : new NoopChatMemory();
+
+        Optional<SystemMessage> systemMessage = prepareSystemMessage(methodCreateInfo, methodArgs, context, memoryId,
+                committableChatMemory);
 
         boolean supportsJsonSchema = supportsJsonSchema(context, methodCreateInfo, methodArgs);
 
@@ -242,6 +252,7 @@ public class AiServiceMethodImplementationSupport {
                 : context.toolService.toolSpecifications();
         Map<String, ToolExecutor> toolExecutors = hasMethodSpecificTools ? methodCreateInfo.getToolExecutors()
                 : context.toolService.toolExecutors();
+        Set<String> immediateReturnToolNames = Set.of();
 
         if (context.toolService.toolProvider() != null) {
             toolSpecifications = toolSpecifications != null ? new ArrayList<>(toolSpecifications) : new ArrayList<>();
@@ -249,22 +260,18 @@ public class AiServiceMethodImplementationSupport {
             ToolProviderRequest request = new QuarkusToolProviderRequest(memoryId, userMessage,
                     methodCreateInfo.getMcpClientNames());
             ToolProviderResult result = context.toolService.toolProvider().provideTools(request);
+            immediateReturnToolNames = Utils.copy(result.immediateReturnToolNames());
             for (ToolSpecification specification : result.tools().keySet()) {
                 toolSpecifications.add(specification);
                 toolExecutors.put(specification.name(), result.tools().get(specification));
             }
         }
-        List<ToolSpecification> effectiveToolSpecifications = toolSpecifications;
-        Map<String, ToolExecutor> finalToolExecutors = toolExecutors;
 
         AugmentationResult augmentationResult = null;
         if (context.retrievalAugmentor != null) {
-            List<ChatMessage> chatMemory = context.hasChatMemory()
-                    ? context.chatMemoryService.getChatMemory(memoryId).messages()
-                    : null;
             Metadata metadata = Metadata.builder()
                     .chatMessage(userMessage)
-                    .chatMemory(chatMemory)
+                    .chatMemory(committableChatMemory.messages())
                     .invocationContext(invocationContext)
                     .build();
             AugmentationRequest augmentationRequest = new AugmentationRequest(userMessage, metadata);
@@ -274,7 +281,6 @@ public class AiServiceMethodImplementationSupport {
         }
 
         var guardrailService = context.guardrailService();
-        var chatMemory = context.hasChatMemory() ? context.chatMemoryService.getChatMemory(memoryId) : null;
 
         var guardrailParams = GuardrailRequestParams.builder()
                 .chatMemory(chatMemory)
@@ -288,18 +294,12 @@ public class AiServiceMethodImplementationSupport {
         userMessage = GuardrailsSupport.executeInputGuardrails(guardrailService, userMessage, methodCreateInfo,
                 guardrailParams);
 
-        CommittableChatMemory committableChatMemory;
         List<ChatMessage> messagesToSend;
-
         if (context.hasChatMemory()) {
-            // we want to defer saving the new messages because the service could fail and
-            // be retried
-            committableChatMemory = new DefaultCommittableChatMemory(chatMemory);
             messagesToSend = createMessagesToSendForExistingMemory(systemMessage, userMessage, committableChatMemory,
                     needsMemorySeed,
                     context, methodCreateInfo);
         } else {
-            committableChatMemory = new NoopChatMemory();
             messagesToSend = createMessagesToSendForNoMemory(systemMessage, userMessage, needsMemorySeed, context,
                     methodCreateInfo);
         }
@@ -391,6 +391,7 @@ public class AiServiceMethodImplementationSupport {
                         memoryId);
         ChatExecutor chatExecutor = ChatExecutor.builder(context.effectiveChatModel(methodCreateInfo, methodArgs))
                 .chatRequest(chatRequest)
+                .invocationContext(invocationContext)
                 .build();
 
         ChatResponse response = chatExecutor.execute();
@@ -458,9 +459,9 @@ public class AiServiceMethodImplementationSupport {
                         .build();
                 toolExecutions.add(toolExecution);
                 toolResults.add(toolExecutionResultMessage);
-                if (toolExecutor != null && toolExecutor instanceof QuarkusToolExecutor) {
-                    immediateToolReturn = ((QuarkusToolExecutor) toolExecutor).returnBehavior() == ReturnBehavior.IMMEDIATE;
-                } else {
+
+                // If any tool does not return immediately, results must be processed by LLM
+                if (!isImmediateReturnTool(toolExecutionRequest.name(), toolExecutor, immediateReturnToolNames)) {
                     immediateToolReturn = false;
                 }
 
@@ -865,10 +866,9 @@ public class AiServiceMethodImplementationSupport {
     private static Optional<SystemMessage> prepareSystemMessage(AiServiceMethodCreateInfo createInfo,
             Object[] methodArgs,
             QuarkusAiServiceContext context,
-            Object memoryId) {
-        List<ChatMessage> previousChatMessages = context.hasChatMemory()
-                ? context.chatMemoryService.getOrCreateChatMemory(memoryId).messages()
-                : Collections.emptyList();
+            Object memoryId,
+            CommittableChatMemory committableChatMemory) {
+        List<ChatMessage> previousChatMessages = committableChatMemory.messages();
 
         if (createInfo.getSystemMessageInfo().isEmpty()) {
             return context.systemMessageProvider.apply(memoryId).map(SystemMessage::new);
@@ -1176,6 +1176,19 @@ public class AiServiceMethodImplementationSupport {
     private static Executor createExecutor() {
         InstanceHandle<ManagedExecutor> executor = Arc.container().instance(ManagedExecutor.class);
         return executor.isAvailable() ? executor.get() : Infrastructure.getDefaultExecutor();
+    }
+
+    private static boolean isImmediateReturnTool(String toolName, ToolExecutor toolExecutor,
+            Set<String> immediateReturnToolNames) {
+        // Check if the executor itself declares immediate return behavior
+        if (toolExecutor instanceof QuarkusToolExecutor quarkusExecutor) {
+            if (quarkusExecutor.returnBehavior() == ReturnBehavior.IMMEDIATE) {
+                return true;
+            }
+        }
+
+        // Otherwise, check if the tool name is in the immediate return set
+        return immediateReturnToolNames.contains(toolName);
     }
 
     public static class Input {
