@@ -1528,6 +1528,27 @@ endif::add-copy-button-to-env-var[]
 |string
 |`+++2023-06-01+++`
 
+a| [[quarkus-langchain4j-anthropic_quarkus-langchain4j-anthropic-disable-beta-header]] [.property-path]##link:#quarkus-langchain4j-anthropic_quarkus-langchain4j-anthropic-disable-beta-header[`quarkus.langchain4j.anthropic.disable-beta-header`]##
+ifdef::add-copy-button-to-config-props[]
+config_property_copy_button:+++quarkus.langchain4j.anthropic.disable-beta-header+++[]
+endif::add-copy-button-to-config-props[]
+
+
+[.description]
+--
+If set to `true`, the `"anthopic-beta"` header will never be sent
+
+
+ifdef::add-copy-button-to-env-var[]
+Environment variable: env_var_with_copy_button:+++QUARKUS_LANGCHAIN4J_ANTHROPIC_DISABLE_BETA_HEADER+++[]
+endif::add-copy-button-to-env-var[]
+ifndef::add-copy-button-to-env-var[]
+Environment variable: `+++QUARKUS_LANGCHAIN4J_ANTHROPIC_DISABLE_BETA_HEADER+++`
+endif::add-copy-button-to-env-var[]
+--
+|boolean
+|`+++false+++`
+
 a| [[quarkus-langchain4j-anthropic_quarkus-langchain4j-anthropic-timeout]] [.property-path]##link:#quarkus-langchain4j-anthropic_quarkus-langchain4j-anthropic-timeout[`quarkus.langchain4j.anthropic.timeout`]##
 ifdef::add-copy-button-to-config-props[]
 config_property_copy_button:+++quarkus.langchain4j.anthropic.timeout+++[]
@@ -1586,6 +1607,27 @@ Environment variable: env_var_with_copy_button:+++QUARKUS_LANGCHAIN4J_ANTHROPIC_
 endif::add-copy-button-to-env-var[]
 ifndef::add-copy-button-to-env-var[]
 Environment variable: `+++QUARKUS_LANGCHAIN4J_ANTHROPIC_LOG_RESPONSES+++`
+endif::add-copy-button-to-env-var[]
+--
+|boolean
+|`+++false+++`
+
+a| [[quarkus-langchain4j-anthropic_quarkus-langchain4j-anthropic-log-requests-curl]] [.property-path]##link:#quarkus-langchain4j-anthropic_quarkus-langchain4j-anthropic-log-requests-curl[`quarkus.langchain4j.anthropic.log-requests-curl`]##
+ifdef::add-copy-button-to-config-props[]
+config_property_copy_button:+++quarkus.langchain4j.anthropic.log-requests-curl+++[]
+endif::add-copy-button-to-config-props[]
+
+
+[.description]
+--
+Whether the Anthropic client should log requests as cURL commands
+
+
+ifdef::add-copy-button-to-env-var[]
+Environment variable: env_var_with_copy_button:+++QUARKUS_LANGCHAIN4J_ANTHROPIC_LOG_REQUESTS_CURL+++[]
+endif::add-copy-button-to-env-var[]
+ifndef::add-copy-button-to-env-var[]
+Environment variable: `+++QUARKUS_LANGCHAIN4J_ANTHROPIC_LOG_REQUESTS_CURL+++`
 endif::add-copy-button-to-env-var[]
 --
 |boolean
@@ -2021,6 +2063,27 @@ endif::add-copy-button-to-env-var[]
 |string
 |`+++2023-06-01+++`
 
+a| [[quarkus-langchain4j-anthropic_quarkus-langchain4j-anthropic-model-name-disable-beta-header]] [.property-path]##link:#quarkus-langchain4j-anthropic_quarkus-langchain4j-anthropic-model-name-disable-beta-header[`quarkus.langchain4j.anthropic."model-name".disable-beta-header`]##
+ifdef::add-copy-button-to-config-props[]
+config_property_copy_button:+++quarkus.langchain4j.anthropic."model-name".disable-beta-header+++[]
+endif::add-copy-button-to-config-props[]
+
+
+[.description]
+--
+If set to `true`, the `"anthopic-beta"` header will never be sent
+
+
+ifdef::add-copy-button-to-env-var[]
+Environment variable: env_var_with_copy_button:+++QUARKUS_LANGCHAIN4J_ANTHROPIC__MODEL_NAME__DISABLE_BETA_HEADER+++[]
+endif::add-copy-button-to-env-var[]
+ifndef::add-copy-button-to-env-var[]
+Environment variable: `+++QUARKUS_LANGCHAIN4J_ANTHROPIC__MODEL_NAME__DISABLE_BETA_HEADER+++`
+endif::add-copy-button-to-env-var[]
+--
+|boolean
+|`+++false+++`
+
 a| [[quarkus-langchain4j-anthropic_quarkus-langchain4j-anthropic-model-name-timeout]] [.property-path]##link:#quarkus-langchain4j-anthropic_quarkus-langchain4j-anthropic-model-name-timeout[`quarkus.langchain4j.anthropic."model-name".timeout`]##
 ifdef::add-copy-button-to-config-props[]
 config_property_copy_button:+++quarkus.langchain4j.anthropic."model-name".timeout+++[]
@@ -2079,6 +2142,27 @@ Environment variable: env_var_with_copy_button:+++QUARKUS_LANGCHAIN4J_ANTHROPIC_
 endif::add-copy-button-to-env-var[]
 ifndef::add-copy-button-to-env-var[]
 Environment variable: `+++QUARKUS_LANGCHAIN4J_ANTHROPIC__MODEL_NAME__LOG_RESPONSES+++`
+endif::add-copy-button-to-env-var[]
+--
+|boolean
+|`+++false+++`
+
+a| [[quarkus-langchain4j-anthropic_quarkus-langchain4j-anthropic-model-name-log-requests-curl]] [.property-path]##link:#quarkus-langchain4j-anthropic_quarkus-langchain4j-anthropic-model-name-log-requests-curl[`quarkus.langchain4j.anthropic."model-name".log-requests-curl`]##
+ifdef::add-copy-button-to-config-props[]
+config_property_copy_button:+++quarkus.langchain4j.anthropic."model-name".log-requests-curl+++[]
+endif::add-copy-button-to-config-props[]
+
+
+[.description]
+--
+Whether the Anthropic client should log requests as cURL commands
+
+
+ifdef::add-copy-button-to-env-var[]
+Environment variable: env_var_with_copy_button:+++QUARKUS_LANGCHAIN4J_ANTHROPIC__MODEL_NAME__LOG_REQUESTS_CURL+++[]
+endif::add-copy-button-to-env-var[]
+ifndef::add-copy-button-to-env-var[]
+Environment variable: `+++QUARKUS_LANGCHAIN4J_ANTHROPIC__MODEL_NAME__LOG_REQUESTS_CURL+++`
 endif::add-copy-button-to-env-var[]
 --
 |boolean
@@ -3279,6 +3363,27 @@ Environment variable: env_var_with_copy_button:+++QUARKUS_LANGCHAIN4J_LOG_RESPON
 endif::add-copy-button-to-env-var[]
 ifndef::add-copy-button-to-env-var[]
 Environment variable: `+++QUARKUS_LANGCHAIN4J_LOG_RESPONSES+++`
+endif::add-copy-button-to-env-var[]
+--
+|boolean
+|`+++false+++`
+
+a| [[quarkus-langchain4j-core_quarkus-langchain4j-log-requests-curl]] [.property-path]##link:#quarkus-langchain4j-core_quarkus-langchain4j-log-requests-curl[`quarkus.langchain4j.log-requests-curl`]##
+ifdef::add-copy-button-to-config-props[]
+config_property_copy_button:+++quarkus.langchain4j.log-requests-curl+++[]
+endif::add-copy-button-to-config-props[]
+
+
+[.description]
+--
+Whether clients should log requests as cURL commands
+
+
+ifdef::add-copy-button-to-env-var[]
+Environment variable: env_var_with_copy_button:+++QUARKUS_LANGCHAIN4J_LOG_REQUESTS_CURL+++[]
+endif::add-copy-button-to-env-var[]
+ifndef::add-copy-button-to-env-var[]
+Environment variable: `+++QUARKUS_LANGCHAIN4J_LOG_REQUESTS_CURL+++`
 endif::add-copy-button-to-env-var[]
 --
 |boolean
@@ -5541,6 +5646,27 @@ endif::add-copy-button-to-env-var[]
 |boolean
 |`+++false+++`
 
+a| [[quarkus-langchain4j-mistral-ai_quarkus-langchain4j-mistralai-log-requests-curl]] [.property-path]##link:#quarkus-langchain4j-mistral-ai_quarkus-langchain4j-mistralai-log-requests-curl[`quarkus.langchain4j.mistralai.log-requests-curl`]##
+ifdef::add-copy-button-to-config-props[]
+config_property_copy_button:+++quarkus.langchain4j.mistralai.log-requests-curl+++[]
+endif::add-copy-button-to-config-props[]
+
+
+[.description]
+--
+Whether the Mistral client should log requests as cURL commands
+
+
+ifdef::add-copy-button-to-env-var[]
+Environment variable: env_var_with_copy_button:+++QUARKUS_LANGCHAIN4J_MISTRALAI_LOG_REQUESTS_CURL+++[]
+endif::add-copy-button-to-env-var[]
+ifndef::add-copy-button-to-env-var[]
+Environment variable: `+++QUARKUS_LANGCHAIN4J_MISTRALAI_LOG_REQUESTS_CURL+++`
+endif::add-copy-button-to-env-var[]
+--
+|boolean
+|`+++false+++`
+
 a| [[quarkus-langchain4j-mistral-ai_quarkus-langchain4j-mistralai-enable-integration]] [.property-path]##link:#quarkus-langchain4j-mistral-ai_quarkus-langchain4j-mistralai-enable-integration[`quarkus.langchain4j.mistralai.enable-integration`]##
 ifdef::add-copy-button-to-config-props[]
 config_property_copy_button:+++quarkus.langchain4j.mistralai.enable-integration+++[]
@@ -5971,6 +6097,27 @@ endif::add-copy-button-to-env-var[]
 |boolean
 |`+++false+++`
 
+a| [[quarkus-langchain4j-mistral-ai_quarkus-langchain4j-mistralai-model-name-log-requests-curl]] [.property-path]##link:#quarkus-langchain4j-mistral-ai_quarkus-langchain4j-mistralai-model-name-log-requests-curl[`quarkus.langchain4j.mistralai."model-name".log-requests-curl`]##
+ifdef::add-copy-button-to-config-props[]
+config_property_copy_button:+++quarkus.langchain4j.mistralai."model-name".log-requests-curl+++[]
+endif::add-copy-button-to-config-props[]
+
+
+[.description]
+--
+Whether the Mistral client should log requests as cURL commands
+
+
+ifdef::add-copy-button-to-env-var[]
+Environment variable: env_var_with_copy_button:+++QUARKUS_LANGCHAIN4J_MISTRALAI__MODEL_NAME__LOG_REQUESTS_CURL+++[]
+endif::add-copy-button-to-env-var[]
+ifndef::add-copy-button-to-env-var[]
+Environment variable: `+++QUARKUS_LANGCHAIN4J_MISTRALAI__MODEL_NAME__LOG_REQUESTS_CURL+++`
+endif::add-copy-button-to-env-var[]
+--
+|boolean
+|`+++false+++`
+
 a| [[quarkus-langchain4j-mistral-ai_quarkus-langchain4j-mistralai-model-name-enable-integration]] [.property-path]##link:#quarkus-langchain4j-mistral-ai_quarkus-langchain4j-mistralai-model-name-enable-integration[`quarkus.langchain4j.mistralai."model-name".enable-integration`]##
 ifdef::add-copy-button-to-config-props[]
 config_property_copy_button:+++quarkus.langchain4j.mistralai."model-name".enable-integration+++[]
@@ -6081,6 +6228,29 @@ endif::add-copy-button-to-env-var[]
 --
 |string
 |`+++ollama/ollama:latest+++`
+
+a|icon:lock[title=Fixed at build time] [[quarkus-langchain4j-ollama_quarkus-langchain4j-ollama-devservices-port]] [.property-path]##link:#quarkus-langchain4j-ollama_quarkus-langchain4j-ollama-devservices-port[`quarkus.langchain4j.ollama.devservices.port`]##
+ifdef::add-copy-button-to-config-props[]
+config_property_copy_button:+++quarkus.langchain4j.ollama.devservices.port+++[]
+endif::add-copy-button-to-config-props[]
+
+
+[.description]
+--
+The port that the dev service should be exposed on.
+
+*Default:* A random free port.
+
+
+ifdef::add-copy-button-to-env-var[]
+Environment variable: env_var_with_copy_button:+++QUARKUS_LANGCHAIN4J_OLLAMA_DEVSERVICES_PORT+++[]
+endif::add-copy-button-to-env-var[]
+ifndef::add-copy-button-to-env-var[]
+Environment variable: `+++QUARKUS_LANGCHAIN4J_OLLAMA_DEVSERVICES_PORT+++`
+endif::add-copy-button-to-env-var[]
+--
+|int
+|
 
 a|icon:lock[title=Fixed at build time] [[quarkus-langchain4j-ollama_quarkus-langchain4j-ollama-chat-model-model-id]] [.property-path]##link:#quarkus-langchain4j-ollama_quarkus-langchain4j-ollama-chat-model-model-id[`quarkus.langchain4j.ollama.chat-model.model-id`]##
 ifdef::add-copy-button-to-config-props[]
@@ -6224,6 +6394,27 @@ Environment variable: env_var_with_copy_button:+++QUARKUS_LANGCHAIN4J_OLLAMA_LOG
 endif::add-copy-button-to-env-var[]
 ifndef::add-copy-button-to-env-var[]
 Environment variable: `+++QUARKUS_LANGCHAIN4J_OLLAMA_LOG_RESPONSES+++`
+endif::add-copy-button-to-env-var[]
+--
+|boolean
+|`+++false+++`
+
+a| [[quarkus-langchain4j-ollama_quarkus-langchain4j-ollama-log-requests-curl]] [.property-path]##link:#quarkus-langchain4j-ollama_quarkus-langchain4j-ollama-log-requests-curl[`quarkus.langchain4j.ollama.log-requests-curl`]##
+ifdef::add-copy-button-to-config-props[]
+config_property_copy_button:+++quarkus.langchain4j.ollama.log-requests-curl+++[]
+endif::add-copy-button-to-config-props[]
+
+
+[.description]
+--
+Whether the Ollama client should log requests as cURL commands
+
+
+ifdef::add-copy-button-to-env-var[]
+Environment variable: env_var_with_copy_button:+++QUARKUS_LANGCHAIN4J_OLLAMA_LOG_REQUESTS_CURL+++[]
+endif::add-copy-button-to-env-var[]
+ifndef::add-copy-button-to-env-var[]
+Environment variable: `+++QUARKUS_LANGCHAIN4J_OLLAMA_LOG_REQUESTS_CURL+++`
 endif::add-copy-button-to-env-var[]
 --
 |boolean
@@ -6737,6 +6928,27 @@ Environment variable: env_var_with_copy_button:+++QUARKUS_LANGCHAIN4J_OLLAMA__MO
 endif::add-copy-button-to-env-var[]
 ifndef::add-copy-button-to-env-var[]
 Environment variable: `+++QUARKUS_LANGCHAIN4J_OLLAMA__MODEL_NAME__LOG_RESPONSES+++`
+endif::add-copy-button-to-env-var[]
+--
+|boolean
+|`+++false+++`
+
+a| [[quarkus-langchain4j-ollama_quarkus-langchain4j-ollama-model-name-log-requests-curl]] [.property-path]##link:#quarkus-langchain4j-ollama_quarkus-langchain4j-ollama-model-name-log-requests-curl[`quarkus.langchain4j.ollama."model-name".log-requests-curl`]##
+ifdef::add-copy-button-to-config-props[]
+config_property_copy_button:+++quarkus.langchain4j.ollama."model-name".log-requests-curl+++[]
+endif::add-copy-button-to-config-props[]
+
+
+[.description]
+--
+Whether the Ollama client should log requests as cURL commands
+
+
+ifdef::add-copy-button-to-env-var[]
+Environment variable: env_var_with_copy_button:+++QUARKUS_LANGCHAIN4J_OLLAMA__MODEL_NAME__LOG_REQUESTS_CURL+++[]
+endif::add-copy-button-to-env-var[]
+ifndef::add-copy-button-to-env-var[]
+Environment variable: `+++QUARKUS_LANGCHAIN4J_OLLAMA__MODEL_NAME__LOG_REQUESTS_CURL+++`
 endif::add-copy-button-to-env-var[]
 --
 |boolean
@@ -7357,6 +7569,27 @@ Environment variable: env_var_with_copy_button:+++QUARKUS_LANGCHAIN4J_OPENAI_LOG
 endif::add-copy-button-to-env-var[]
 ifndef::add-copy-button-to-env-var[]
 Environment variable: `+++QUARKUS_LANGCHAIN4J_OPENAI_LOG_RESPONSES+++`
+endif::add-copy-button-to-env-var[]
+--
+|boolean
+|`+++false+++`
+
+a| [[quarkus-langchain4j-openai_quarkus-langchain4j-openai-log-requests-curl]] [.property-path]##link:#quarkus-langchain4j-openai_quarkus-langchain4j-openai-log-requests-curl[`quarkus.langchain4j.openai.log-requests-curl`]##
+ifdef::add-copy-button-to-config-props[]
+config_property_copy_button:+++quarkus.langchain4j.openai.log-requests-curl+++[]
+endif::add-copy-button-to-config-props[]
+
+
+[.description]
+--
+Whether the OpenAI client should log requests as cURL commands
+
+
+ifdef::add-copy-button-to-env-var[]
+Environment variable: env_var_with_copy_button:+++QUARKUS_LANGCHAIN4J_OPENAI_LOG_REQUESTS_CURL+++[]
+endif::add-copy-button-to-env-var[]
+ifndef::add-copy-button-to-env-var[]
+Environment variable: `+++QUARKUS_LANGCHAIN4J_OPENAI_LOG_REQUESTS_CURL+++`
 endif::add-copy-button-to-env-var[]
 --
 |boolean
@@ -8288,6 +8521,27 @@ Environment variable: env_var_with_copy_button:+++QUARKUS_LANGCHAIN4J_OPENAI__MO
 endif::add-copy-button-to-env-var[]
 ifndef::add-copy-button-to-env-var[]
 Environment variable: `+++QUARKUS_LANGCHAIN4J_OPENAI__MODEL_NAME__LOG_RESPONSES+++`
+endif::add-copy-button-to-env-var[]
+--
+|boolean
+|`+++false+++`
+
+a| [[quarkus-langchain4j-openai_quarkus-langchain4j-openai-model-name-log-requests-curl]] [.property-path]##link:#quarkus-langchain4j-openai_quarkus-langchain4j-openai-model-name-log-requests-curl[`quarkus.langchain4j.openai."model-name".log-requests-curl`]##
+ifdef::add-copy-button-to-config-props[]
+config_property_copy_button:+++quarkus.langchain4j.openai."model-name".log-requests-curl+++[]
+endif::add-copy-button-to-config-props[]
+
+
+[.description]
+--
+Whether the OpenAI client should log requests as cURL commands
+
+
+ifdef::add-copy-button-to-env-var[]
+Environment variable: env_var_with_copy_button:+++QUARKUS_LANGCHAIN4J_OPENAI__MODEL_NAME__LOG_REQUESTS_CURL+++[]
+endif::add-copy-button-to-env-var[]
+ifndef::add-copy-button-to-env-var[]
+Environment variable: `+++QUARKUS_LANGCHAIN4J_OPENAI__MODEL_NAME__LOG_REQUESTS_CURL+++`
 endif::add-copy-button-to-env-var[]
 --
 |boolean
@@ -9821,6 +10075,27 @@ endif::add-copy-button-to-env-var[]
 |boolean
 |`+++false+++`
 
+a| [[quarkus-langchain4j-watsonx_quarkus-langchain4j-watsonx-log-requests-curl]] [.property-path]##link:#quarkus-langchain4j-watsonx_quarkus-langchain4j-watsonx-log-requests-curl[`quarkus.langchain4j.watsonx.log-requests-curl`]##
+ifdef::add-copy-button-to-config-props[]
+config_property_copy_button:+++quarkus.langchain4j.watsonx.log-requests-curl+++[]
+endif::add-copy-button-to-config-props[]
+
+
+[.description]
+--
+Whether the watsonx.ai client should log requests as cURL commands.
+
+
+ifdef::add-copy-button-to-env-var[]
+Environment variable: env_var_with_copy_button:+++QUARKUS_LANGCHAIN4J_WATSONX_LOG_REQUESTS_CURL+++[]
+endif::add-copy-button-to-env-var[]
+ifndef::add-copy-button-to-env-var[]
+Environment variable: `+++QUARKUS_LANGCHAIN4J_WATSONX_LOG_REQUESTS_CURL+++`
+endif::add-copy-button-to-env-var[]
+--
+|boolean
+|`+++false+++`
+
 a| [[quarkus-langchain4j-watsonx_quarkus-langchain4j-watsonx-enable-integration]] [.property-path]##link:#quarkus-langchain4j-watsonx_quarkus-langchain4j-watsonx-enable-integration[`quarkus.langchain4j.watsonx.enable-integration`]##
 ifdef::add-copy-button-to-config-props[]
 config_property_copy_button:+++quarkus.langchain4j.watsonx.enable-integration+++[]
@@ -11332,6 +11607,27 @@ Environment variable: env_var_with_copy_button:+++QUARKUS_LANGCHAIN4J_WATSONX__M
 endif::add-copy-button-to-env-var[]
 ifndef::add-copy-button-to-env-var[]
 Environment variable: `+++QUARKUS_LANGCHAIN4J_WATSONX__MODEL_NAME__LOG_RESPONSES+++`
+endif::add-copy-button-to-env-var[]
+--
+|boolean
+|`+++false+++`
+
+a| [[quarkus-langchain4j-watsonx_quarkus-langchain4j-watsonx-model-name-log-requests-curl]] [.property-path]##link:#quarkus-langchain4j-watsonx_quarkus-langchain4j-watsonx-model-name-log-requests-curl[`quarkus.langchain4j.watsonx."model-name".log-requests-curl`]##
+ifdef::add-copy-button-to-config-props[]
+config_property_copy_button:+++quarkus.langchain4j.watsonx."model-name".log-requests-curl+++[]
+endif::add-copy-button-to-config-props[]
+
+
+[.description]
+--
+Whether the watsonx.ai client should log requests as cURL commands.
+
+
+ifdef::add-copy-button-to-env-var[]
+Environment variable: env_var_with_copy_button:+++QUARKUS_LANGCHAIN4J_WATSONX__MODEL_NAME__LOG_REQUESTS_CURL+++[]
+endif::add-copy-button-to-env-var[]
+ifndef::add-copy-button-to-env-var[]
+Environment variable: `+++QUARKUS_LANGCHAIN4J_WATSONX__MODEL_NAME__LOG_REQUESTS_CURL+++`
 endif::add-copy-button-to-env-var[]
 --
 |boolean
